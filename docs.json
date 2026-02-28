@@ -80,6 +80,7 @@
               "reference/instructions/transact-spl",
               "reference/instructions/initialize-spl-tree",
               "reference/instructions/update-deposit-limit",
+              "reference/instructions/update-deposit-limit-for-spl-token",
               "reference/instructions/update-global-config"
             ]
           },

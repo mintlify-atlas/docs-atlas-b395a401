@@ -581,8 +581,8 @@ Clients must keep a local copy of the Merkle tree to generate proofs.
     Download periodic tree snapshots for faster initial sync:
     
     ```typescript
-    // Download checkpoint (e.g., every 10,000 commitments)
-    const checkpoint = await fetch(`https://api.privacycash.com/checkpoints/10000.json`);
+    // Example: Download checkpoint from your own indexer service
+    const checkpoint = await fetch(`https://your-indexer.example.com/checkpoints/10000.json`);
     merkleTree = MerkleTree.fromCheckpoint(checkpoint);
     
     // Sync only new commitments since checkpoint
@@ -592,9 +592,9 @@ Clients must keep a local copy of the Merkle tree to generate proofs.
     }
     ```
     
-    <Tip>
-    Privacy Cash SDK provides built-in checkpoint sync for fast bootstrapping.
-    </Tip>
+    <Note>
+    Checkpoint sync requires setting up your own indexer service to periodically save tree state.
+    </Note>
   </Tab>
 </Tabs>
 
