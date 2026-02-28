@@ -1,0 +1,138 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Privacy Cash",
+  "projectDescription": "A privacy protocol on Solana enabling private transfers of SOL and SPL tokens using zero-knowledge proofs",
+  "theme": "aspen",
+  "primaryColor": "#8B5CF6",
+  "lightColor": "#A78BFA",
+  "darkColor": "#6D28D9",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/how-it-works",
+              "concepts/privacy-model",
+              "concepts/zero-knowledge-proofs",
+              "concepts/merkle-trees",
+              "concepts/commitments-and-nullifiers"
+            ]
+          },
+          {
+            "group": "SDK Integration",
+            "pages": [
+              "sdk/overview",
+              "sdk/installation",
+              "sdk/basic-usage",
+              "sdk/examples"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/overview",
+              "deployment/devnet",
+              "deployment/mainnet",
+              "deployment/verification"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/audits",
+              "security/safety-features",
+              "security/best-practices"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Program Reference",
+        "groups": [
+          {
+            "group": "Instructions",
+            "pages": [
+              "reference/instructions/initialize",
+              "reference/instructions/transact",
+              "reference/instructions/transact-spl",
+              "reference/instructions/initialize-spl-tree",
+              "reference/instructions/update-deposit-limit",
+              "reference/instructions/update-global-config"
+            ]
+          },
+          {
+            "group": "Accounts",
+            "pages": [
+              "reference/accounts/merkle-tree-account",
+              "reference/accounts/global-config",
+              "reference/accounts/nullifier-account",
+              "reference/accounts/tree-token-account"
+            ]
+          },
+          {
+            "group": "Data Structures",
+            "pages": [
+              "reference/structures/proof",
+              "reference/structures/ext-data"
+            ]
+          },
+          {
+            "group": "Errors",
+            "pages": [
+              "reference/errors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Advanced",
+        "groups": [
+          {
+            "group": "Architecture",
+            "pages": [
+              "advanced/circuits",
+              "advanced/groth16-verification",
+              "advanced/merkle-tree-implementation"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "advanced/fee-management",
+              "advanced/supported-tokens",
+              "advanced/deposit-limits"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Private SOL and SPL token transfers using zero-knowledge proofs",
+    "Merkle tree-based commitment scheme with 26-level tree",
+    "Groth16 proof verification on-chain",
+    "Configurable fee system with deposit and withdrawal fees",
+    "Multi-token support with allowlist for SPL tokens",
+    "Fully audited by multiple security firms"
+  ],
+  "publicApiSurface": [
+    "initialize - Initialize the privacy pool for SOL",
+    "transact - Deposit or withdraw SOL privately",
+    "transact_spl - Deposit or withdraw SPL tokens privately",
+    "initialize_tree_account_for_spl_token - Initialize privacy pool for a specific SPL token",
+    "update_deposit_limit - Update maximum deposit amount for SOL",
+    "update_deposit_limit_for_spl_token - Update maximum deposit amount for SPL tokens",
+    "update_global_config - Update fee rates and error margins"
+  ]
+}
