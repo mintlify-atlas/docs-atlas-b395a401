@@ -1,0 +1,277 @@
+---
+title: Mainnet Deployment
+description: Deploy Privacy Cash to Solana mainnet with production settings
+---
+
+Deploying to mainnet requires careful preparation and security considerations. The Privacy Cash mainnet deployment is fully audited and uses multisig governance.
+
+## Program Information
+
+- **Network**: Solana Mainnet Beta
+- **Program ID**: `9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD`
+- **Upgrade Authority**: `AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM` (Squad Multisig)
+- **Verification Hash**: `c6f1e5336f2068dc1c1e1c64e92e3d8495b8df79f78011e2620af60aa43090c5`
+
+<Warning>
+Mainnet deployment requires real SOL and affects real user funds. Ensure thorough testing on devnet first.
+</Warning>
+
+## Pre-Deployment Checklist
+
+<Steps>
+  <Step title="Complete Devnet Testing">
+    - All unit tests pass
+    - Integration tests successful
+    - User acceptance testing complete
+  </Step>
+  
+  <Step title="Security Audit">
+    - Code has been audited by reputable security firms
+    - All critical issues resolved
+    - Audit reports reviewed
+  </Step>
+  
+  <Step title="Prepare Keypairs">
+    - Secure the program keypair (`zkcash-keypair.json`)
+    - Secure the deployment keypair with sufficient SOL
+    - Set up multisig wallet for upgrade authority
+  </Step>
+  
+  <Step title="Plan Upgrade Authority Transfer">
+    - Configure Squad multisig wallet
+    - Plan authority transfer transaction
+    - Coordinate with multisig signers
+  </Step>
+</Steps>
+
+## Build for Mainnet
+
+<Steps>
+  <Step title="Navigate to Anchor Directory">
+    ```bash
+    cd anchor
+    ```
+  </Step>
+  
+  <Step title="Build Verifiable Program">
+    Always use verifiable builds for mainnet:
+    
+    ```bash
+    anchor build --verifiable
+    ```
+    
+    This ensures the build can be reproduced and verified by anyone.
+  </Step>
+  
+  <Step title="Copy Program Keypair">
+    ```bash
+    rm target/deploy/zkcash-keypair.json
+    cp zkcash-keypair.json target/deploy/zkcash-keypair.json
+    ```
+  </Step>
+</Steps>
+
+## Deploy to Mainnet
+
+<Warning>
+Ensure you have sufficient SOL for deployment. Program deployment typically costs 5-10 SOL depending on program size.
+</Warning>
+
+### Deploy Command
+
+```bash
+anchor deploy --verifiable --provider.cluster mainnet
+```
+
+This command:
+- Deploys the program to mainnet
+- Sets your `deploy-keypair.json` as the initial upgrade authority
+- Creates the program account at the address specified in `zkcash-keypair.json`
+
+## Initialize Mainnet Program
+
+### Initialize SPL Token Trees (via Squad)
+
+For mainnet, program initialization is done through Squad multisig for security.
+
+#### Generate Squad Transaction
+
+```bash
+cd ../scripts
+npx ts-node initialize_spl_tree_mainnet_squads.ts
+```
+
+This script generates a base58-encoded transaction that can be submitted to Squad:
+
+**Configuration**:
+- USDT Mint: `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB`
+- Max Deposit: 200,000 USDT
+- Squad Vault: `AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM`
+
+#### Submit to Squad Multisig
+
+<Steps>
+  <Step title="Copy Transaction">
+    Copy the base58 transaction output from the script
+  </Step>
+  
+  <Step title="Create Squad Proposal">
+    Go to your Squad multisig interface and create a new proposal
+  </Step>
+  
+  <Step title="Paste Transaction">
+    Paste the base58 transaction into the proposal
+  </Step>
+  
+  <Step title="Get Signatures">
+    Coordinate with multisig members to approve and execute
+  </Step>
+</Steps>
+
+## Transfer Upgrade Authority
+
+After successful deployment, transfer upgrade authority to the Squad multisig:
+
+```bash
+solana program set-upgrade-authority 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD \
+  --new-upgrade-authority AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM \
+  --upgrade-authority deploy-keypair.json \
+  --skip-new-upgrade-authority-signer-check \
+  --url mainnet-beta
+```
+
+This command:
+- Sets the Squad vault as the new upgrade authority
+- Removes single-key control over program upgrades
+- Requires multisig approval for future updates
+
+<Warning>
+This operation is irreversible. After transfer, only the Squad multisig can upgrade the program. Verify the multisig address before executing.
+</Warning>
+
+## Address Lookup Tables (ALT)
+
+For transaction size optimization, Privacy Cash uses Address Lookup Tables.
+
+### Create ALT
+
+```bash
+npx ts-node create_alt_mainnet.ts
+```
+
+This script:
+- Creates a new Address Lookup Table
+- Adds all frequently-used protocol addresses
+- Includes PDAs for SOL and SPL token trees
+- Adds token program accounts and ATAs
+
+**Addresses included**:
+- Program ID and PDAs
+- SOL tree account and token account
+- USDC tree account and associated token accounts
+- Fee recipient accounts
+- Relayer addresses
+- System programs
+
+### Extend Existing ALT
+
+To add new tokens (e.g., USDT) to an existing ALT:
+
+```bash
+npx ts-node extend_alt_mainnet.ts
+```
+
+**Current ALT**: `HEN49U2ySJ85Vc78qprSW9y6mFDhs1NczRxyppNHjofe`
+
+## Update Configuration (via Squad)
+
+Configuration updates like deposit limits must go through Squad multisig.
+
+### Update SPL Deposit Limit
+
+```bash
+npx ts-node update_spl_deposit_limit_via_squad.ts
+```
+
+This generates a Squad transaction to update the deposit limit for an SPL token.
+
+**Example Configuration**:
+- Token: USDC (`EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`)
+- New Limit: 1,000,000 USDC
+
+The script outputs:
+- Instruction discriminator
+- Serialized parameters
+- Complete base58 transaction for Squad
+
+## Verify Deployment
+
+After deployment:
+
+<Steps>
+  <Step title="Verify Program ID">
+    ```bash
+    solana program show 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD --url mainnet-beta
+    ```
+  </Step>
+  
+  <Step title="Verify Upgrade Authority">
+    Confirm the upgrade authority is the Squad multisig:
+    ```
+    Upgrade Authority: AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM
+    ```
+  </Step>
+  
+  <Step title="Run Verification Build">
+    See the [Verification](/deployment/verification) guide for build verification steps
+  </Step>
+</Steps>
+
+## Monitoring
+
+### Check Program Health
+
+```bash
+# View program account
+solana account 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD --url mainnet-beta
+
+# Monitor transactions
+solana transaction-history 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD --url mainnet-beta
+```
+
+### Explorer Links
+
+- Program: https://explorer.solana.com/address/9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD
+- Squad Multisig: https://explorer.solana.com/address/AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM
+
+## Security Best Practices
+
+<Warning>
+Follow these security guidelines for mainnet deployment:
+</Warning>
+
+- **Never commit keypairs** to version control
+- **Use hardware wallets** for multisig signers
+- **Test on devnet** before every mainnet upgrade
+- **Coordinate multisig operations** with all signers in advance
+- **Monitor program activity** after deployment
+- **Keep backups** of all keypairs and configuration
+- **Document changes** for audit trail
+
+## Mainnet Configuration Summary
+
+| Parameter | Value |
+|-----------|-------|
+| Program ID | `9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD` |
+| Upgrade Authority | `AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM` |
+| Fee Recipient | `AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM` |
+| Relayer | `AF8VuwCncKd5ZBnLYYnMjqh4vLch8mjqE75sFe5ZjRFW` |
+| USDC Mint | `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` |
+| USDT Mint | `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB` |
+| ALT Address | `HEN49U2ySJ85Vc78qprSW9y6mFDhs1NczRxyppNHjofe` |
+
+## Next Steps
+
+<Card title="Verify Deployment" icon="shield-check" href="/deployment/verification">
+  Verify your mainnet build matches the deployed bytecode
+</Card>

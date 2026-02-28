@@ -1,0 +1,671 @@
+---
+title: 'Merkle Trees'
+description: 'Learn how Privacy Cash uses sparse Merkle trees to store commitments efficiently on-chain'
+icon: 'sitemap'
+---
+
+## What is a Merkle Tree?
+
+A **Merkle tree** is a cryptographic data structure that allows efficient and secure verification of large data sets. In Privacy Cash, Merkle trees store all deposit commitments in a verifiable structure.
+
+<Info>
+**Key Properties:**
+
+- **Efficient proofs**: Prove a leaf exists in a tree with only O(log n) data
+- **Tamper-evident**: Any change to a leaf changes the root
+- **Append-only**: New leaves are added but never removed
+- **Constant verification**: Proof verification takes constant time
+</Info>
+
+## Why Merkle Trees?
+
+Merkle trees enable Privacy Cash's core privacy features:
+
+<CardGroup cols={2}>
+  <Card title="Membership Proofs" icon="check-circle">
+    Prove a commitment exists in the tree without revealing which leaf it is.
+  </Card>
+  
+  <Card title="Efficient Storage" icon="database">
+    Store millions of commitments with minimal on-chain state (only root + sparse subtrees).
+  </Card>
+  
+  <Card title="Fast Verification" icon="bolt">
+    Verify membership in ~20,000 compute units (~0.4ms), enabling Solana-scale throughput.
+  </Card>
+  
+  <Card title="Historical Proofs" icon="clock-rotate-left">
+    Prove against old tree states using root history, allowing delayed withdrawals.
+  </Card>
+</CardGroup>
+
+## Tree Structure
+
+Privacy Cash uses a **binary sparse Merkle tree** optimized for zero-knowledge proofs.
+
+### Parameters
+
+```typescript Tree Configuration
+const MERKLE_TREE_HEIGHT = 26;       // 26 levels deep
+const MAX_LEAVES = 2 ** 26;          // 67,108,864 commitments
+const ROOT_HISTORY_SIZE = 100;       // Store 100 recent roots
+const HASH_FUNCTION = "Poseidon";     // ZK-friendly hash
+```
+
+### Binary Tree Layout
+
+```
+Level 0 (Root):        [Root Hash]
+                      /           \
+Level 1:          [H(L,R)]      [H(L,R)]
+                 /       \      /       \
+Level 2:     [H(L,R)] [H(L,R)] ...   [H(L,R)]
+                ...
+Level 25:    [Leaf] [Leaf] [Leaf] ... [Leaf]
+             (Commitments are stored here)
+```
+
+Each level doubles the number of nodes until reaching 2^26 leaves at the bottom.
+
+### Sparse Tree Optimization
+
+Instead of storing all 2^27 - 1 nodes (~134M nodes), Privacy Cash stores:
+
+<Tabs>
+  <Tab title="Active Subtrees">
+    Only the **rightmost path** from root to next insertion point.
+    
+    ```rust From merkle_tree.rs:900
+    pub struct MerkleTreeAccount {
+        pub authority: Pubkey,
+        pub next_index: u64,               // Next leaf position
+        pub subtrees: [[u8; 32]; 26],      // Only 26 subtree hashes!
+        pub root: [u8; 32],                // Current root
+        pub root_history: [[u8; 32]; 100], // Recent roots
+        pub root_index: u64,
+        // ...
+    }
+    ```
+    
+    **Storage:** 26 subtrees × 32 bytes = 832 bytes (instead of gigabytes!)
+  </Tab>
+  
+  <Tab title="Zero Values">
+    Empty subtrees are represented by pre-computed **zero hashes**.
+    
+    ```typescript From constants.ts:6
+    // Pre-computed zero hashes for each level
+    export const ZERO_BYTES = [
+      [0, 0, 0, ...],        // Level 0: hash of two empty level-1 nodes
+      [32, 152, 245, ...],   // Level 1: hash of two empty level-2 nodes
+      [16, 105, 103, ...],   // Level 2: ...
+      // ... (26 levels)
+    ];
+    ```
+    
+    Empty subtrees don't need to be stored—they're computed from constants.
+  </Tab>
+  
+  <Tab title="Root History">
+    Store the **100 most recent roots** in a circular buffer.
+    
+    ```rust From merkle_tree.rs:65
+    let new_root_index = (tree_account.root_index as usize)
+        .checked_add(1)
+        .ok_or(ErrorCode::ArithmeticOverflow)? % root_history_size;
+    tree_account.root_index = new_root_index as u64;
+    tree_account.root_history[new_root_index] = current_level_hash;
+    ```
+    
+    This allows withdrawals using commitments from up to 100 transactions ago.
+  </Tab>
+</Tabs>
+
+## Poseidon Hash Function
+
+Privacy Cash uses **Poseidon**, a hash function designed specifically for zero-knowledge proofs.
+
+### Why Poseidon?
+
+<Tabs>
+  <Tab title="ZK-Friendly">
+    Poseidon requires far fewer constraints in ZK circuits than traditional hashes.
+    
+    | Hash Function | Constraints (per hash) |
+    |---------------|------------------------|
+    | SHA-256 | ~25,000 |
+    | Keccak-256 | ~30,000 |
+    | **Poseidon** | **~60** |
+    
+    **Result:** Faster proving, smaller circuits, lower costs.
+  </Tab>
+  
+  <Tab title="Security">
+    Poseidon is cryptographically secure with 128-bit security.
+    
+    - Based on algebraic constructions over prime fields
+    - Designed by Grassi et al. (2019)
+    - Extensively analyzed by cryptographers
+    - Used by Zcash, StarkWare, Polygon zkEVM
+    
+    <Info>
+    Poseidon operates over the BN254 scalar field, matching the field used in Groth16 proofs.
+    </Info>
+  </Tab>
+  
+  <Tab title="Performance">
+    Poseidon hashing is fast both on-chain and off-chain.
+    
+    | Context | Time per Hash |
+    |---------|---------------|
+    | On-chain (Solana) | ~100 compute units |
+    | Off-chain (Node.js) | ~0.1ms |
+    | In ZK circuit | ~60 constraints |
+    
+    **Merkle proof verification:** 26 hashes × 100 CU = ~2,600 CU
+  </Tab>
+</Tabs>
+
+### Poseidon Specification
+
+```rust
+// From light-hasher crate (used by Privacy Cash)
+pub struct Poseidon;
+
+impl Hasher for Poseidon {
+    fn hashv(data: &[&[u8]]) -> Result<[u8; 32]> {
+        // Poseidon hash over BN254 scalar field
+        // Parameters: t=3 (2 inputs + 1 output), RF=8, RP=57
+    }
+}
+```
+
+**Inputs:** Two 32-byte field elements
+**Output:** One 32-byte field element
+
+## Tree Operations
+
+### Initialization
+
+When a new Merkle tree is created:
+
+<Steps>
+  <Step title="Set Empty Root">
+    Initialize the root to the hash of two empty level-1 subtrees:
+    
+    ```rust From merkle_tree.rs:9
+    pub fn initialize<H: Hasher>(tree_account: &mut MerkleTreeAccount) -> Result<()> {
+        let height = tree_account.height as usize;
+        let zero_bytes = H::zero_bytes();
+        
+        for i in 0..height {
+            tree_account.subtrees[i] = zero_bytes[i];
+        }
+        
+        let initial_root = H::zero_bytes()[height];
+        tree_account.root = initial_root;
+        tree_account.root_history[0] = initial_root;
+        
+        Ok(())
+    }
+    ```
+  </Step>
+  
+  <Step title="Initialize Subtrees">
+    Set all subtrees to their zero values (empty tree state).
+  </Step>
+  
+  <Step title="Add to Root History">
+    Store the initial root at position 0 in the circular root history buffer.
+  </Step>
+</Steps>
+
+### Appending Commitments
+
+When a new commitment is added:
+
+<Steps>
+  <Step title="Check Capacity">
+    Ensure the tree isn't full:
+    
+    ```rust From merkle_tree.rs:33
+    let max_capacity = 1u64 << height; // 2^26 = 67,108,864
+    require!(
+        tree_account.next_index < max_capacity,
+        ErrorCode::MerkleTreeFull
+    );
+    ```
+  </Step>
+  
+  <Step title="Compute Path">
+    Calculate the Merkle path from leaf to root:
+    
+    ```rust From merkle_tree.rs:41
+    let mut current_index = tree_account.next_index as usize;
+    let mut current_level_hash = leaf;  // The commitment
+    
+    for i in 0..height {
+        let subtree = &mut tree_account.subtrees[i];
+        let zero_byte = H::zero_bytes()[i];
+        
+        if current_index % 2 == 0 {
+            // Left child: pair with zero (right is empty)
+            left = current_level_hash;
+            right = zero_byte;
+            *subtree = current_level_hash;
+        } else {
+            // Right child: pair with stored left sibling
+            left = *subtree;
+            right = current_level_hash;
+        }
+        
+        current_level_hash = H::hashv(&[&left, &right]).unwrap();
+        current_index /= 2;  // Move up one level
+    }
+    ```
+    
+    This efficiently computes the new root using only stored subtrees.
+  </Step>
+  
+  <Step title="Update Root">
+    Store the new root and update root history:
+    
+    ```rust From merkle_tree.rs:65
+    tree_account.root = current_level_hash;
+    tree_account.next_index += 1;
+    
+    let new_root_index = (tree_account.root_index + 1) % root_history_size;
+    tree_account.root_index = new_root_index;
+    tree_account.root_history[new_root_index] = current_level_hash;
+    ```
+  </Step>
+  
+  <Step title="Emit Event">
+    Emit a commitment event with the new leaf and index:
+    
+    ```rust From lib.rs:351
+    emit!(CommitmentData {
+        index: next_index_to_insert,
+        commitment: proof.output_commitments[0],
+        encrypted_output: encrypted_output1.to_vec(),
+    });
+    ```
+    
+    This allows clients to sync the tree and decrypt their commitments.
+  </Step>
+</Steps>
+
+### Root Verification
+
+When verifying a withdrawal proof:
+
+```rust From merkle_tree.rs:79
+pub fn is_known_root(tree_account: &MerkleTreeAccount, root: [u8; 32]) -> bool {
+    if root == [0u8; 32] {
+        return false;  // Reject zero root
+    }
+    
+    let root_history_size = tree_account.root_history_size as usize;
+    let current_root_index = tree_account.root_index as usize;
+    let mut i = current_root_index;
+    
+    // Check all roots in circular buffer
+    loop {
+        if root == tree_account.root_history[i] {
+            return true;  // Found matching root
+        }
+        
+        if i == 0 {
+            i = root_history_size - 1;
+        } else {
+            i -= 1;
+        }
+        
+        if i == current_root_index {
+            break;  // Checked all roots
+        }
+    }
+    
+    false  // Root not found
+}
+```
+
+<Note>
+Root history allows withdrawals using commitments from up to 100 transactions ago, providing flexibility in timing.
+</Note>
+
+## Merkle Proofs
+
+A **Merkle proof** proves that a specific leaf exists in the tree at a given index.
+
+### Proof Structure
+
+```typescript
+interface MerkleProof {
+  leaf: Field;                    // The commitment being proven
+  pathElements: Field[];          // 26 sibling hashes
+  pathIndices: number;            // Binary path (0=left, 1=right)
+  root: Field;                    // Expected root after verification
+}
+```
+
+### Proof Generation (Client-Side)
+
+<Steps>
+  <Step title="Locate Leaf">
+    Find the commitment's index in the tree:
+    
+    ```typescript
+    const leafIndex = await findCommitmentIndex(commitment);
+    // Example: leafIndex = 42
+    ```
+  </Step>
+  
+  <Step title="Collect Siblings">
+    For each level, collect the sibling hash:
+    
+    ```typescript
+    const pathElements: bigint[] = [];
+    let index = leafIndex;
+    
+    for (let level = 0; level < MERKLE_TREE_HEIGHT; level++) {
+      const isLeft = index % 2 === 0;
+      const siblingIndex = isLeft ? index + 1 : index - 1;
+      
+      const sibling = await getLeafAtIndex(siblingIndex, level);
+      pathElements.push(sibling);
+      
+      index = Math.floor(index / 2);  // Move up
+    }
+    ```
+  </Step>
+  
+  <Step title="Encode Path">
+    Convert the path to a binary number:
+    
+    ```typescript
+    // pathIndices encodes the path as a single number
+    // Bit i = 0 if leaf is left child at level i, 1 if right
+    
+    // Example: leafIndex = 42 (binary: 101010)
+    const pathIndices = leafIndex;  // Use index directly
+    ```
+  </Step>
+  
+  <Step title="Package Proof">
+    Create the proof object:
+    
+    ```typescript
+    const proof: MerkleProof = {
+      leaf: commitment,
+      pathElements: pathElements,
+      pathIndices: pathIndices,
+      root: merkleTree.root,
+    };
+    ```
+  </Step>
+</Steps>
+
+### Proof Verification (Circuit)
+
+The zero-knowledge circuit verifies the Merkle proof:
+
+```circom From merkleProof.circom:9
+template MerkleProof(levels) {
+    signal input leaf;
+    signal input pathElements[levels];
+    signal input pathIndices;
+    signal output root;
+    
+    component switcher[levels];
+    component hasher[levels];
+    
+    // Convert pathIndices to bits (one per level)
+    component indexBits = Num2Bits(levels);
+    indexBits.in <== pathIndices;
+    
+    for (var i = 0; i < levels; i++) {
+        // Determine if leaf is left or right child
+        switcher[i] = Switcher();
+        switcher[i].L <== i == 0 ? leaf : hasher[i - 1].out;
+        switcher[i].R <== pathElements[i];
+        switcher[i].sel <== indexBits.out[i];
+        
+        // Hash left and right children
+        hasher[i] = Poseidon(2);
+        hasher[i].inputs[0] <== switcher[i].outL;
+        hasher[i].inputs[1] <== switcher[i].outR;
+    }
+    
+    // Output the computed root
+    root <== hasher[levels - 1].out;
+}
+```
+
+**Verification steps:**
+1. Extract path direction bits from pathIndices
+2. For each level, place leaf/hash on correct side based on bit
+3. Hash left and right children using Poseidon
+4. Compare final computed root with expected root
+
+<Info>
+**Proof size:** 26 siblings × 32 bytes = 832 bytes
+
+**Verification cost:** 26 hashes × ~60 constraints = ~1,560 constraints
+</Info>
+
+## Multi-Token Trees
+
+Privacy Cash maintains **separate Merkle trees** for different token types.
+
+### Tree Organization
+
+<Tabs>
+  <Tab title="SOL Tree">
+    Native SOL has a dedicated tree:
+    
+    ```rust
+    // PDA seeds for SOL tree
+    seeds = [b"merkle_tree"]
+    
+    // Accounts structure
+    pub struct Transact {
+        #[account(
+            mut,
+            seeds = [b"merkle_tree"],
+            bump
+        )]
+        pub tree_account: AccountLoader<'info, MerkleTreeAccount>,
+        // ...
+    }
+    ```
+  </Tab>
+  
+  <Tab title="SPL Token Trees">
+    Each SPL token gets its own tree:
+    
+    ```rust
+    // PDA seeds include mint address
+    seeds = [b"merkle_tree", mint.key().as_ref()]
+    
+    // Accounts structure for SPL
+    pub struct TransactSpl {
+        #[account(
+            mut,
+            seeds = [b"merkle_tree", mint.key().as_ref()],
+            bump
+        )]
+        pub tree_account: AccountLoader<'info, MerkleTreeAccount>,
+        pub mint: Account<'info, Mint>,
+        // ...
+    }
+    ```
+    
+    <Note>
+    Each token's tree must be initialized by the authority before use via `initialize_tree_account_for_spl_token`.
+    </Note>
+  </Tab>
+</Tabs>
+
+### Why Separate Trees?
+
+<CardGroup cols={2}>
+  <Card title="Type Safety" icon="shield-check">
+    Prevents mixing token types in proofs. You can't withdraw USDC using a SOL commitment.
+  </Card>
+  
+  <Card title="Independent Limits" icon="sliders">
+    Each token can have different deposit limits and fee structures.
+  </Card>
+  
+  <Card title="Parallel Growth" icon="arrows-split-up-and-left">
+    Trees grow independently based on token usage, not artificially coupled.
+  </Card>
+  
+  <Card title="Simplified Proofs" icon="diagram-project">
+    Circuit doesn't need to verify mint addresses match across inputs/outputs.
+  </Card>
+</CardGroup>
+
+## Tree Synchronization
+
+Clients must keep a local copy of the Merkle tree to generate proofs.
+
+### Sync Strategies
+
+<Tabs>
+  <Tab title="Event Listening">
+    Subscribe to commitment events and update tree in real-time:
+    
+    ```typescript
+    const connection = new Connection(RPC_URL);
+    
+    // Listen for commitment events
+    connection.onLogs(
+      PRIVACY_CASH_PROGRAM_ID,
+      (logs) => {
+        const events = parseCommitmentEvents(logs);
+        for (const event of events) {
+          merkleTree.append(event.commitment);
+        }
+      },
+      'confirmed'
+    );
+    ```
+  </Tab>
+  
+  <Tab title="Batch Sync">
+    Periodically fetch all commitments and rebuild tree:
+    
+    ```typescript
+    async function syncTree() {
+      const treeAccount = await program.account.merkleTreeAccount.fetch(TREE_PDA);
+      const nextIndex = treeAccount.nextIndex.toNumber();
+      
+      // Fetch commitment events from program logs
+      const commitments = await fetchCommitments(0, nextIndex);
+      
+      // Rebuild tree
+      merkleTree = new MerkleTree(MERKLE_TREE_HEIGHT);
+      for (const commitment of commitments) {
+        merkleTree.append(commitment);
+      }
+      
+      // Verify root matches on-chain
+      assert(merkleTree.root === treeAccount.root);
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Checkpoint Sync">
+    Download periodic tree snapshots for faster initial sync:
+    
+    ```typescript
+    // Download checkpoint (e.g., every 10,000 commitments)
+    const checkpoint = await fetch(`https://api.privacycash.com/checkpoints/10000.json`);
+    merkleTree = MerkleTree.fromCheckpoint(checkpoint);
+    
+    // Sync only new commitments since checkpoint
+    const newCommitments = await fetchCommitments(10000, currentIndex);
+    for (const commitment of newCommitments) {
+      merkleTree.append(commitment);
+    }
+    ```
+    
+    <Tip>
+    Privacy Cash SDK provides built-in checkpoint sync for fast bootstrapping.
+    </Tip>
+  </Tab>
+</Tabs>
+
+## Performance Analysis
+
+### Scalability
+
+| Metric | Value |
+|--------|-------|
+| **Max commitments** | 67,108,864 (2^26) |
+| **Commitments per transaction** | 2 (2 outputs) |
+| **Max transactions** | ~33.5 million |
+| **Current usage (SOL)** | ~45,000 commitments (~0.07%) |
+| **Estimated years to fill** | 50+ years at current rate |
+
+### Cost Analysis
+
+| Operation | Compute Units | SOL Cost (at 0.000005 SOL/CU) |
+|-----------|---------------|-------------------------------|
+| Append commitment | ~5,000 CU | ~0.000025 SOL |
+| Verify Merkle proof | ~2,600 CU | ~0.000013 SOL |
+| Full transaction | ~200,000 CU | ~0.001 SOL |
+
+<Info>
+Merkle tree operations are extremely efficient on Solana. The sparse tree design keeps costs low even with millions of commitments.
+</Info>
+
+## Implementation Reference
+
+<CardGroup cols={2}>
+  <Card title="Merkle Tree" icon="code" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/anchor/programs/zkcash/src/merkle_tree.rs">
+    **merkle_tree.rs**
+    
+    On-chain Merkle tree implementation with append and verification logic
+  </Card>
+  
+  <Card title="Merkle Proof Circuit" icon="microchip" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/circuits/merkleProof.circom">
+    **merkleProof.circom**
+    
+    ZK circuit for verifying Merkle proofs
+  </Card>
+  
+  <Card title="Tree Account" icon="database" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/anchor/programs/zkcash/src/lib.rs#L896">
+    **lib.rs:896**
+    
+    MerkleTreeAccount struct definition
+  </Card>
+  
+  <Card title="Root Verification" icon="check-circle" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/anchor/programs/zkcash/src/lib.rs#L221">
+    **lib.rs:221**
+    
+    Root history verification in transact instruction
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Commitments & Nullifiers" icon="fingerprint" href="/concepts/commitments-and-nullifiers">
+    Learn about the leaves stored in Merkle trees
+  </Card>
+  
+  <Card title="Zero-Knowledge Proofs" icon="key" href="/concepts/zero-knowledge-proofs">
+    Understand how Merkle proofs are used in ZK circuits
+  </Card>
+  
+  <Card title="Build with SDK" icon="code" href="/quickstart">
+    Start using Merkle trees via the Privacy Cash SDK
+  </Card>
+  
+  <Card title="Tree Sync Guide" icon="arrows-rotate" href="/integration/tree-sync">
+    Learn best practices for keeping your tree in sync
+  </Card>
+</CardGroup>

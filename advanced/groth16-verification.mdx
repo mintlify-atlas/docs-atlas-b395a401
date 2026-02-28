@@ -1,0 +1,346 @@
+---
+title: 'Groth16 Proof Verification'
+description: 'On-chain verification of zero-knowledge proofs using Groth16'
+---
+
+# Groth16 Proof Verification
+
+Privacy Cash uses Groth16 zero-knowledge proofs for transaction privacy. The Groth16 verifier runs entirely on-chain in Solana programs, leveraging the BN254 elliptic curve precompiled functions.
+
+## Groth16 Overview
+
+Groth16 is a zero-knowledge SNARK (Succinct Non-interactive Argument of Knowledge) that provides:
+- **Small proof size:** 256 bytes (2 G1 points + 1 G2 point)
+- **Fast verification:** Single pairing check
+- **Trusted setup:** Requires ceremony for each circuit
+
+The proof consists of three elliptic curve points:
+- `proof_a`: G1 point (64 bytes)
+- `proof_b`: G2 point (128 bytes)
+- `proof_c`: G1 point (64 bytes)
+
+## Verification Key Structure
+
+The verifying key is generated during the trusted setup and contains:
+
+```rust
+pub struct Groth16Verifyingkey<'a> {
+    pub nr_pubinputs: usize,        // Number of public inputs
+    pub vk_alpha_g1: [u8; 64],      // Alpha in G1
+    pub vk_beta_g2: [u8; 128],      // Beta in G2
+    pub vk_gamme_g2: [u8; 128],     // Gamma in G2
+    pub vk_delta_g2: [u8; 128],     // Delta in G2
+    pub vk_ic: &'a [[u8; 64]],      // IC coefficients in G1
+}
+```
+
+**Key components:**
+- **Alpha, Beta, Gamma, Delta:** Cryptographic parameters from trusted setup
+- **IC coefficients:** `vk_ic[0]` is the constant term, `vk_ic[1..n+1]` are coefficients for each public input
+- The length of `vk_ic` must equal `nr_pubinputs + 1`
+
+## Verifier Implementation
+
+The verifier is implemented in `src/groth16.rs` and provides a safe, efficient verification interface:
+
+```rust
+pub struct Groth16Verifier<'a, const NR_INPUTS: usize> {
+    proof_a: &'a [u8; 64],
+    proof_b: &'a [u8; 128],
+    proof_c: &'a [u8; 64],
+    public_inputs: &'a [[u8; 32]; NR_INPUTS],
+    prepared_public_inputs: [u8; 64],
+    verifyingkey: &'a Groth16Verifyingkey<'a>,
+}
+```
+
+## Verification Process
+
+### 1. Initialization
+
+```rust
+let mut verifier = Groth16Verifier::new(
+    &proof_a,
+    &proof_b,
+    &proof_c,
+    public_inputs.as_slice(),
+    &verifying_key,
+)?;
+```
+
+The `new` function performs validation:
+
+```rust
+if proof_a.len() != 64 {
+    return Err(Groth16Error::InvalidG1Length);
+}
+
+if proof_b.len() != 128 {
+    return Err(Groth16Error::InvalidG2Length);
+}
+
+if proof_c.len() != 64 {
+    return Err(Groth16Error::InvalidG1Length);
+}
+
+if public_inputs.len() + 1 != verifyingkey.vk_ic.len() {
+    return Err(Groth16Error::InvalidPublicInputsLength);
+}
+```
+
+### 2. Preparing Public Inputs
+
+The core of Groth16 verification involves computing a linear combination of IC coefficients:
+
+```rust
+pub fn prepare_inputs<const CHECK: bool>(&mut self) -> Result<(), Groth16Error> {
+    let mut prepared_public_inputs = self.verifyingkey.vk_ic[0];
+    
+    for (i, input) in self.public_inputs.iter().enumerate() {
+        if CHECK && !is_less_than_bn254_field_size_be(input) {
+            return Err(Groth16Error::PublicInputGreaterThanFieldSize);
+        }
+        let mul_res = alt_bn128_multiplication(
+            &[&self.verifyingkey.vk_ic[i + 1][..], &input[..]].concat(),
+        )
+        .map_err(|_| Groth16Error::PreparingInputsG1MulFailed)?;
+        prepared_public_inputs =
+            alt_bn128_addition(&[&mul_res[..], &prepared_public_inputs[..]].concat())
+                .map_err(|_| Groth16Error::PreparingInputsG1AdditionFailed)?[..]
+                .try_into()
+                .map_err(|_| Groth16Error::PreparingInputsG1AdditionFailed)?;
+    }
+    
+    self.prepared_public_inputs = prepared_public_inputs;
+    Ok(())
+}
+```
+
+**Algorithm:**
+1. Start with `vk_ic[0]` (constant term)
+2. For each public input `x[i]`:
+   - Multiply `vk_ic[i+1]` by scalar `x[i]` (G1 multiplication)
+   - Add result to running sum (G1 addition)
+3. Result: `vk_ic[0] + x[0]*vk_ic[1] + x[1]*vk_ic[2] + ... + x[n-1]*vk_ic[n]`
+
+This computed value represents the public input component of the proof.
+
+**Optional field size check:**
+When `CHECK = true`, each public input is verified to be less than the BN254 field modulus:
+
+```rust
+pub fn is_less_than_bn254_field_size_be(bytes: &[u8; 32]) -> bool {
+    let bigint = BigUint::from_bytes_be(bytes);
+    bigint < ark_bn254::Fr::MODULUS.into()
+}
+```
+
+### 3. Pairing Check
+
+The final verification performs a bilinear pairing check:
+
+```rust
+fn verify_common<const CHECK: bool>(&mut self) -> Result<bool, Groth16Error> {
+    self.prepare_inputs::<CHECK>()?;
+    
+    let pairing_input = [
+        self.proof_a.as_slice(),
+        self.proof_b.as_slice(),
+        self.prepared_public_inputs.as_slice(),
+        self.verifyingkey.vk_gamme_g2.as_slice(),
+        self.proof_c.as_slice(),
+        self.verifyingkey.vk_delta_g2.as_slice(),
+        self.verifyingkey.vk_alpha_g1.as_slice(),
+        self.verifyingkey.vk_beta_g2.as_slice(),
+    ]
+    .concat();
+    
+    let pairing_res = alt_bn128_pairing(pairing_input.as_slice())
+        .map_err(|_| Groth16Error::ProofVerificationFailed)?;
+    
+    if pairing_res[31] != 1 {
+        return Err(Groth16Error::ProofVerificationFailed);
+    }
+    Ok(true)
+}
+```
+
+**Pairing equation:**
+
+The verifier checks:
+
+```
+e(A, B) = e(α, β) * e(L, γ) * e(C, δ)
+```
+
+Where:
+- `A = proof_a`
+- `B = proof_b`
+- `C = proof_c`
+- `L = prepared_public_inputs`
+- `α = vk_alpha_g1`
+- `β = vk_beta_g2`
+- `γ = vk_gamma_g2`
+- `δ = vk_delta_g2`
+
+The pairing function takes 4 pairs of points (8 total) and computes:
+
+```
+e(A, B) * e(L, γ) * e(C, δ) * e(α, β) = 1
+```
+
+If the result equals 1 (checked via `pairing_res[31] != 1`), the proof is valid.
+
+## Verification API
+
+Two verification methods are provided:
+
+### Checked Verification
+
+```rust
+pub fn verify(&mut self) -> Result<bool, Groth16Error> {
+    self.verify_common::<true>()
+}
+```
+
+Validates that all public inputs are within the BN254 field size. **Use this by default** for security.
+
+### Unchecked Verification
+
+```rust
+pub fn verify_unchecked(&mut self) -> Result<bool, Groth16Error> {
+    self.verify_common::<false>()
+}
+```
+
+Skips field size validation for a small gas optimization. Only use if inputs are pre-validated.
+
+## Solana BN254 Precompiles
+
+The verifier uses Solana's native BN254 precompiled functions for efficient elliptic curve operations:
+
+### alt_bn128_multiplication
+
+```rust
+let mul_res = alt_bn128_multiplication(
+    &[&point[..], &scalar[..]].concat(),
+)?;
+```
+
+Computes scalar multiplication: `point * scalar` on the BN254 curve.
+
+**Cost:** ~2,100 compute units
+
+### alt_bn128_addition
+
+```rust
+let sum = alt_bn128_addition(
+    &[&point1[..], &point2[..]].concat(),
+)?;
+```
+
+Computes point addition: `point1 + point2` on the BN254 curve.
+
+**Cost:** ~540 compute units
+
+### alt_bn128_pairing
+
+```rust
+let result = alt_bn128_pairing(pairing_input.as_slice())?;
+```
+
+Computes a pairing check over 4 pairs of G1 and G2 points.
+
+**Cost:** ~25,000 compute units
+
+## Usage Example
+
+```rust
+use crate::groth16::{Groth16Verifier, Groth16Verifyingkey};
+
+// Parse proof components
+let proof_a: [u8; 64] = // ... from proof bytes [0..64]
+let proof_b: [u8; 128] = // ... from proof bytes [64..192]
+let proof_c: [u8; 64] = // ... from proof bytes [192..256]
+
+// Public inputs (7 for Privacy Cash transaction circuit)
+let public_inputs: [[u8; 32]; 7] = [
+    root,
+    public_amount,
+    ext_data_hash,
+    input_nullifier[0],
+    input_nullifier[1],
+    output_commitment[0],
+    output_commitment[1],
+];
+
+// Create verifier
+let mut verifier = Groth16Verifier::new(
+    &proof_a,
+    &proof_b,
+    &proof_c,
+    &public_inputs,
+    &verifying_key,
+)?;
+
+// Verify proof
+verifier.verify()?;
+```
+
+## Error Handling
+
+The verifier defines comprehensive error types:
+
+```rust
+pub enum Groth16Error {
+    InvalidG1Length,
+    InvalidG2Length,
+    InvalidPublicInputsLength,
+    PublicInputGreaterThanFieldSize,
+    PreparingInputsG1MulFailed,
+    PreparingInputsG1AdditionFailed,
+    ProofVerificationFailed,
+}
+```
+
+## Performance Characteristics
+
+**Total compute units:** ~30,000-35,000 CU
+
+Breakdown:
+- Input preparation: ~2,100 CU per public input (scalar mul) + ~540 CU per addition
+- Pairing check: ~25,000 CU
+- Overhead: ~1,000 CU
+
+For Privacy Cash with 7 public inputs:
+- 7 × 2,100 = 14,700 CU (multiplications)
+- 7 × 540 = 3,780 CU (additions)
+- 25,000 CU (pairing)
+- **Total: ~44,000 CU**
+
+This fits comfortably within Solana's 200,000 CU default limit for instructions.
+
+## Security Considerations
+
+### Trusted Setup
+
+Groth16 requires a circuit-specific trusted setup. If the setup's "toxic waste" is not destroyed, proofs can be forged. Privacy Cash uses:
+- Multi-party computation (MPC) ceremonies
+- Multiple independent participants
+- Public verification transcripts
+
+### Proof Malleability
+
+Groth16 proofs are non-malleable. An attacker cannot modify a valid proof without breaking the pairing equation.
+
+### Field Overflow
+
+Public inputs must be validated to be less than the BN254 field modulus. The `verify()` method enforces this, preventing field overflow attacks.
+
+### Side-Channel Resistance
+
+The verifier operates on public data only (proof and public inputs), so it is not vulnerable to timing attacks.
+
+## Implementation Source
+
+The Groth16 verifier is adapted from [Light Protocol's implementation](https://github.com/Lightprotocol/groth16-solana), which provides a battle-tested, gas-optimized verifier for Solana.

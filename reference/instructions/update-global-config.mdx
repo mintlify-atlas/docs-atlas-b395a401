@@ -1,0 +1,306 @@
+---
+title: 'update_global_config'
+description: 'Update global fee configuration for SOL and SPL token transactions'
+---
+
+## Overview
+
+The `update_global_config` instruction allows the program authority to modify the global fee settings that apply to all SOL and SPL token transactions.
+
+Fees are specified in basis points (1 basis point = 0.01%).
+
+<Note>
+Only the program authority can call this instruction. At least one parameter must be provided.
+</Note>
+
+## Function Signature
+
+```rust
+pub fn update_global_config(
+    ctx: Context<UpdateGlobalConfig>,
+    deposit_fee_rate: Option<u16>,
+    withdrawal_fee_rate: Option<u16>,
+    fee_error_margin: Option<u16>
+) -> Result<()>
+```
+
+## Parameters
+
+<ParamField path="deposit_fee_rate" type="Option<u16>">
+  Deposit fee rate in basis points (0-10000).
+  - `0` = 0% (free deposits)
+  - `25` = 0.25%
+  - `100` = 1%
+  - `1000` = 10%
+  - `10000` = 100% (maximum)
+  
+  Pass `None` to leave unchanged.
+</ParamField>
+
+<ParamField path="withdrawal_fee_rate" type="Option<u16>">
+  Withdrawal fee rate in basis points (0-10000).
+  - `0` = 0% (free withdrawals)
+  - `25` = 0.25% (default)
+  - `50` = 0.5%
+  - `100` = 1%
+  - `10000` = 100% (maximum)
+  
+  Pass `None` to leave unchanged.
+</ParamField>
+
+<ParamField path="fee_error_margin" type="Option<u16>">
+  Acceptable fee margin in basis points (0-10000). Allows fees to be within a range:
+  - `0` = Exact fee required
+  - `500` = ±5% (default)
+  - `1000` = ±10%
+  
+  Formula: `expected_fee * (1 - margin/10000) <= actual_fee <= expected_fee`
+  
+  Pass `None` to leave unchanged.
+</ParamField>
+
+## Accounts
+
+<ParamField path="global_config" type="Account<GlobalConfig>" required>
+  Global configuration account. PDA: `["global_config"]`.
+  - **Mutable**: Yes
+  - **Authority check**: Must be owned by the signer
+</ParamField>
+
+<ParamField path="authority" type="Signer" required>
+  The program authority. Must match the global_config's authority field.
+  - **Signer**: Yes
+</ParamField>
+
+## Code Examples
+
+### Update Withdrawal Fee
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
+
+const program = anchor.workspace.Zkcash as Program<Zkcash>;
+const authority = anchor.web3.Keypair.generate();
+
+const [globalConfigPDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("global_config")],
+  program.programId
+);
+
+// Update withdrawal fee to 0.5% (50 basis points)
+await program.methods
+  .updateGlobalConfig(
+    null, // Don't change deposit fee
+    50,   // 0.5% withdrawal fee
+    null  // Don't change error margin
+  )
+  .accounts({
+    globalConfig: globalConfigPDA,
+    authority: authority.publicKey
+  })
+  .signers([authority])
+  .rpc();
+```
+
+### Update All Fee Settings
+
+```typescript
+// Update all fee parameters at once
+await program.methods
+  .updateGlobalConfig(
+    10,   // 0.1% deposit fee
+    30,   // 0.3% withdrawal fee
+    1000  // 10% error margin
+  )
+  .accounts({
+    globalConfig: globalConfigPDA,
+    authority: authority.publicKey
+  })
+  .signers([authority])
+  .rpc();
+
+console.log("All fee settings updated");
+```
+
+### Make Deposits Free
+
+```typescript
+// Set deposit fee to 0%
+await program.methods
+  .updateGlobalConfig(
+    0,    // Free deposits
+    null, // Keep withdrawal fee unchanged
+    null  // Keep error margin unchanged
+  )
+  .accounts({
+    globalConfig: globalConfigPDA,
+    authority: authority.publicKey
+  })
+  .signers([authority])
+  .rpc();
+```
+
+## Fee Calculation Examples
+
+<AccordionGroup>
+  <Accordion title="Deposit Fee Calculation">
+    With deposit fee rate of 25 basis points (0.25%):
+    
+    ```
+    Deposit: 10 SOL
+    Fee: 10 * 0.0025 = 0.025 SOL
+    User receives: 9.975 SOL in private balance
+    ```
+  </Accordion>
+  
+  <Accordion title="Withdrawal Fee Calculation">
+    With withdrawal fee rate of 50 basis points (0.5%):
+    
+    ```
+    Withdrawal: 5 SOL
+    Fee: 5 * 0.005 = 0.025 SOL
+    User receives: 4.975 SOL
+    Fee recipient receives: 0.025 SOL
+    ```
+  </Accordion>
+  
+  <Accordion title="Fee Error Margin">
+    With error margin of 500 basis points (5%):
+    
+    ```
+    Expected fee: 0.025 SOL
+    Minimum acceptable: 0.025 * 0.95 = 0.02375 SOL
+    Maximum acceptable: 0.025 SOL (no upper bound)
+    
+    This allows slightly lower fees to account for rounding errors.
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Basis Points Reference
+
+<CardGroup cols={2}>
+  <Card title="Common Fee Rates">
+    - 0 = 0% (free)
+    - 1 = 0.01%
+    - 10 = 0.1%
+    - 25 = 0.25%
+    - 50 = 0.5%
+    - 100 = 1%
+    - 250 = 2.5%
+    - 500 = 5%
+    - 1000 = 10%
+  </Card>
+  
+  <Card title="Fee Error Margins">
+    - 0 = No margin (exact)
+    - 100 = ±1%
+    - 500 = ±5%
+    - 1000 = ±10%
+    - 2000 = ±20%
+  </Card>
+</CardGroup>
+
+## State Changes
+
+### GlobalConfig
+- `deposit_fee_rate`: Updated if provided (otherwise unchanged)
+- `withdrawal_fee_rate`: Updated if provided (otherwise unchanged)
+- `fee_error_margin`: Updated if provided (otherwise unchanged)
+
+All other fields remain unchanged.
+
+## Behavior
+
+1. Validates each provided fee rate is ≤ 10000 (100%)
+2. Updates only the provided parameters
+3. Emits program log messages for each updated field
+4. Changes apply immediately to all subsequent transactions
+
+<Warning>
+Fee changes apply immediately. Ongoing transactions use the fee rates at the time of execution.
+</Warning>
+
+## Authorization
+
+The signer must be the global config's authority:
+
+```rust
+#[account(
+    mut,
+    seeds = [b"global_config"],
+    bump = global_config.bump,
+    has_one = authority @ ErrorCode::Unauthorized
+)]
+pub global_config: Account<'info, GlobalConfig>,
+```
+
+## Errors
+
+<ResponseField name="Unauthorized" type="Error">
+  Thrown when the signer is not the global config's authority.
+</ResponseField>
+
+<ResponseField name="InvalidFeeRate" type="Error">
+  Thrown when any fee rate parameter exceeds 10000 (100%).
+</ResponseField>
+
+## Program Log Output
+
+When successful, the instruction logs each updated field:
+
+```
+Deposit fee rate updated to: {rate} basis points
+Withdrawal fee rate updated to: {rate} basis points
+Fee error margin updated to: {margin} basis points
+```
+
+## Reading Current Configuration
+
+```typescript
+// Fetch current global config
+const config = await program.account.globalConfig.fetch(globalConfigPDA);
+
+console.log(`Deposit fee: ${config.depositFeeRate} basis points`);
+console.log(`Withdrawal fee: ${config.withdrawalFeeRate} basis points`);
+console.log(`Fee error margin: ${config.feeErrorMargin} basis points`);
+console.log(`Authority: ${config.authority.toString()}`);
+```
+
+## Default Configuration
+
+Initialized by the `initialize` instruction:
+
+```rust
+deposit_fee_rate: 0,      // 0% - Free deposits
+withdrawal_fee_rate: 25,  // 0.25%
+fee_error_margin: 500,    // 5%
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Test fee changes">
+    Test on devnet before updating mainnet configuration.
+  </Step>
+  
+  <Step title="Announce changes">
+    Notify users before making fee changes, especially increases.
+  </Step>
+  
+  <Step title="Set reasonable margins">
+    Use 5-10% error margins to account for precision and rounding.
+  </Step>
+  
+  <Step title="Monitor impact">
+    Track fee collection and transaction volume after changes.
+  </Step>
+</Steps>
+
+## See Also
+
+- [initialize](/reference/instructions/initialize) - Set initial fee configuration
+- [transact](/reference/instructions/transact) - How fees apply to SOL transactions
+- [transact_spl](/reference/instructions/transact-spl) - How fees apply to SPL transactions

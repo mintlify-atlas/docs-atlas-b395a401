@@ -1,0 +1,321 @@
+---
+title: 'Supported Tokens'
+description: 'List of SPL tokens supported by Privacy Cash protocol'
+---
+
+## Overview
+
+Privacy Cash supports both native SOL and a curated list of SPL tokens. Each supported SPL token has its own dedicated Merkle tree for privacy-preserving transactions.
+
+## Token Support Configuration
+
+The protocol uses two mechanisms to control which tokens are supported:
+
+### Environment-Based Configuration
+
+```rust
+// Localnet: Allow all SPL tokens (for testing)
+#[cfg(any(feature = "localnet", test))]
+pub const ALLOW_ALL_SPL_TOKENS: bool = true;
+
+// Production/Devnet: Use allowlist
+#[cfg(not(any(feature = "localnet", test)))]
+pub const ALLOW_ALL_SPL_TOKENS: bool = false;
+```
+
+### Token Allowlist
+
+In production and devnet environments, only tokens in the `ALLOWED_TOKENS` constant are permitted.
+
+## Supported SPL Tokens
+
+### Mainnet Tokens
+
+The following tokens are supported on Solana mainnet:
+
+| Token | Symbol | Mint Address |
+|-------|--------|-------------|
+| USD Coin | USDC | `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` |
+| Tether USD | USDT | `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB` |
+| Ore | ORE | `oreoU2P8bN6jkk3jbaiVxYnG1dCXcYxwhwyK9jSybcp` |
+| Zcash | ZEC | `A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS` |
+| Staked Ore | stORE | `sTorERYB6xAZ1SSbwpK3zoK2EEwbBrc7TZAzg1uCGiH` |
+| Jupiter USDC | jlUSDC | `9BEcn9aPEmhSPbPQeFGjidRiEKki46fVQDyPpSQXPA2D` |
+| Jupiter Wrapped SOL | jlWSOL | `2uQsyo1fXXQkDtcpXnLofWy88PxcvnfH2L8FPSE62FVU` |
+
+**Code Reference**: `lib.rs:52-60`
+
+### Devnet Tokens
+
+The following test tokens are supported on Solana devnet:
+
+| Token | Symbol | Mint Address |
+|-------|--------|-------------|
+| USD Coin (Devnet) | USDC | `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU` |
+| Tether USD (Devnet) | USDT | `EcFc2cMyZxaKBkFK1XooxiyDyCPneLXiMwSJiVY6eTad` |
+| Ore (Devnet) | ORE | `6zxkY8UygHKBf64LJDXnzcYr9wdvyqScmj7oGPBFw58Z` |
+| Zcash (Devnet) | ZEC | `Vu3Lcx3chdCHmy9KCCdd19DdJsLejHAZxm1E1bTgE16` |
+| Staked Ore (Devnet) | stORE | `5MvqBFU5zeHaEfRuAFW2RhqidHLb7Ejsa6sUwPQQXcj1` |
+| Jupiter USDC (Devnet) | jlUSDC | `Fv7iYNEmq277whRwAFbCqNY3Qz9r73gwDRLrw5yiNmtf` |
+| Jupiter Wrapped SOL (Devnet) | jlWSOL | `8wBeZG358JQxdsPUVaRJY1viRPkx8Auoh8NvpFscbQka` |
+
+**Code Reference**: `lib.rs:41-49`
+
+## Native SOL Support
+
+In addition to SPL tokens, Privacy Cash natively supports SOL transactions. The SOL mint address is represented as:
+
+```rust
+pub const SOL_ADDRESS: Pubkey = pubkey!("11111111111111111111111111111112");
+```
+
+**Code Reference**: `utils.rs:14`
+
+## Token Validation
+
+Before processing SPL token transactions, the protocol validates that the token is allowed:
+
+### During Tree Initialization
+
+```rust
+require!(
+    ALLOW_ALL_SPL_TOKENS || ALLOWED_TOKENS.contains(&ctx.accounts.mint.key()),
+    ErrorCode::InvalidMintAddress
+);
+```
+
+**Code Reference**: `lib.rs:161-163`
+
+### During Transactions
+
+```rust
+require!(
+    ALLOW_ALL_SPL_TOKENS || ALLOWED_TOKENS.contains(&ext_data.mint_address),
+    ErrorCode::InvalidMintAddress
+);
+```
+
+**Code Reference**: `lib.rs:395-397`
+
+If validation fails, the transaction reverts with:
+> "Invalid mint address: mint address is not allowed"
+
+## Adding Support for New Tokens
+
+### Mainnet Token Addition
+
+To add a new token to mainnet:
+
+1. **Update the `ALLOWED_TOKENS` constant** in `lib.rs`:
+
+```rust
+#[cfg(not(feature = "devnet"))]
+pub const ALLOWED_TOKENS: &[Pubkey] = &[
+    pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"), // USDC
+    // ... existing tokens ...
+    pubkey!("YOUR_NEW_TOKEN_MINT_ADDRESS"), // New Token
+];
+```
+
+2. **Initialize a tree for the token** using the `initialize_tree_account_for_spl_token` instruction
+
+3. **Deploy the updated program** with the new token list
+
+### Devnet Token Addition
+
+Follow the same process for devnet tokens:
+
+```rust
+#[cfg(feature = "devnet")]
+pub const ALLOWED_TOKENS: &[Pubkey] = &[
+    pubkey!("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"), // USDC
+    // ... existing tokens ...
+    pubkey!("YOUR_NEW_TOKEN_MINT_ADDRESS"), // New Token
+];
+```
+
+## Initializing Token Trees
+
+Each supported SPL token requires its own Merkle tree initialization.
+
+### Function Signature
+
+```rust
+pub fn initialize_tree_account_for_spl_token(
+    ctx: Context<InitializeTreeAccountForSplToken>,
+    max_deposit_amount: u64
+) -> Result<()>
+```
+
+### Requirements
+
+- Only the protocol authority can initialize token trees
+- Token mint must be in `ALLOWED_TOKENS` (unless `ALLOW_ALL_SPL_TOKENS` is enabled)
+- Each token gets a separate Merkle tree with seed: `[b"merkle_tree", mint.key().as_ref()]`
+
+### Tree Properties
+
+Each SPL token tree is initialized with:
+
+- **Height**: 26 (supports 67,108,864 commitments)
+- **Root History Size**: 100 previous roots
+- **Deposit Limit**: Configurable per token (specified during initialization)
+
+**Code Reference**: `lib.rs:151-185`
+
+## Token Account Management
+
+### Associated Token Accounts (ATAs)
+
+For each supported token, the protocol manages:
+
+1. **Tree ATA**: The protocol's token account that holds deposited tokens
+   - Authority: `global_config` PDA
+   - Created automatically on first deposit
+
+2. **Fee Recipient ATA**: Where protocol fees are collected
+   - Must exist for supported tokens
+   - Validated during transactions
+
+**Code Reference**: `lib.rs:744-756`
+
+### Token Transfer Operations
+
+#### Deposits
+
+Tokens are transferred from the user's token account to the tree's ATA:
+
+```rust
+token::transfer(
+    CpiContext::new(
+        ctx.accounts.token_program.to_account_info(),
+        SplTransfer {
+            from: ctx.accounts.signer_token_account.to_account_info(),
+            to: ctx.accounts.tree_ata.to_account_info(),
+            authority: ctx.accounts.signer.to_account_info(),
+        },
+    ),
+    ext_amount as u64,
+)?;
+```
+
+**Code Reference**: `lib.rs:442-452`
+
+#### Withdrawals
+
+Tokens are transferred from the tree's ATA to the recipient's token account:
+
+```rust
+token::transfer(
+    CpiContext::new_with_signer(
+        ctx.accounts.token_program.to_account_info(),
+        SplTransfer {
+            from: ctx.accounts.tree_ata.to_account_info(),
+            to: ctx.accounts.recipient_token_account.to_account_info(),
+            authority: ctx.accounts.global_config.to_account_info(),
+        },
+        signer_seeds,
+    ),
+    ext_amount_abs,
+)?;
+```
+
+**Code Reference**: `lib.rs:464-476`
+
+## Testing on Localnet
+
+For local development and testing, all SPL tokens are automatically allowed:
+
+```rust
+#[cfg(any(feature = "localnet", test))]
+pub const ALLOW_ALL_SPL_TOKENS: bool = true;
+```
+
+This allows developers to test with any token without modifying the allowlist.
+
+## Token Metadata
+
+### USDC (USD Coin)
+- **Decimals**: 6
+- **Use Case**: Stablecoin pegged to US Dollar
+- **Privacy Use**: Private payments, remittances
+
+### USDT (Tether USD)
+- **Decimals**: 6
+- **Use Case**: Stablecoin pegged to US Dollar
+- **Privacy Use**: Private transfers, trading
+
+### ORE (Ore)
+- **Use Case**: Mining token on Solana
+- **Privacy Use**: Private mining rewards, transfers
+
+### ZEC (Zcash)
+- **Use Case**: Privacy-focused cryptocurrency bridge
+- **Privacy Use**: Cross-chain privacy transactions
+
+### stORE (Staked Ore)
+- **Use Case**: Liquid staking derivative of ORE
+- **Privacy Use**: Private staking positions
+
+### jlUSDC (Jupiter USDC)
+- **Use Case**: Jupiter DEX liquidity token
+- **Privacy Use**: Private liquidity provision
+
+### jlWSOL (Jupiter Wrapped SOL)
+- **Use Case**: Jupiter DEX liquidity token
+- **Privacy Use**: Private SOL positions
+
+## Security Considerations
+
+### Token Validation
+
+1. **Allowlist enforcement**: Only approved tokens can be used in production
+2. **Mint verification**: Every transaction validates the token mint address
+3. **Authority control**: Only protocol authority can add new token trees
+
+### Account Validation
+
+During SPL token transactions, the protocol validates:
+
+```rust
+// Signer owns the token account
+require!(
+    ctx.accounts.signer_token_account.owner == ctx.accounts.signer.key(),
+    ErrorCode::InvalidTokenAccount
+);
+
+// Token account matches the expected mint
+require!(
+    ctx.accounts.signer_token_account.mint == ctx.accounts.mint.key(),
+    ErrorCode::InvalidTokenAccountMintAddress
+);
+```
+
+**Code Reference**: `lib.rs:376-383`
+
+## Error Codes
+
+### InvalidMintAddress
+> "Invalid mint address: mint address is not allowed"
+
+Thrown when attempting to use an unsupported token.
+
+### InvalidTokenAccount
+> "Invalid token account: account is not owned by the token program"
+
+Thrown when the provided token account is invalid.
+
+### InvalidTokenAccountMintAddress
+> "Invalid token account mint address"
+
+Thrown when the token account's mint doesn't match the expected mint.
+
+## Code References
+
+- Mainnet token list: `lib.rs:52-60`
+- Devnet token list: `lib.rs:41-49`
+- Token validation (initialization): `lib.rs:161-163`
+- Token validation (transactions): `lib.rs:395-397`
+- SOL address constant: `utils.rs:14`
+- Tree initialization: `lib.rs:151-185`
+- SPL token transactions: `lib.rs:371-520`

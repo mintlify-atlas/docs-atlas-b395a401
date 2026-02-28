@@ -1,0 +1,273 @@
+---
+title: 'Zero-Knowledge Circuit Architecture'
+description: 'Deep dive into Privacy Cash circom circuit implementation'
+---
+
+# Zero-Knowledge Circuit Architecture
+
+Privacy Cash uses circom 2.0.0 circuits to enable private transactions on Solana. The circuit implementation follows a Universal JoinSplit design that supports flexible multi-input, multi-output transactions.
+
+## Circuit Overview
+
+The main transaction circuit is defined in `circuits/transaction.circom` and instantiated with:
+
+```circom
+component main {public [root, publicAmount, extDataHash, inputNullifier, outputCommitment]} 
+  = Transaction(26, 2, 2);
+```
+
+**Parameters:**
+- `levels = 26`: Merkle tree depth (supports 33,554,432 transactions, matching Light Protocol v1)
+- `nIns = 2`: Number of input UTXOs
+- `nOuts = 2`: Number of output UTXOs
+
+**Public inputs:**
+- `root`: Merkle tree root for membership proof
+- `publicAmount`: External amount (deposit/withdrawal) minus fee
+- `extDataHash`: Hash of external transaction data
+- `inputNullifier[nIns]`: Nullifiers to prevent double-spending
+- `outputCommitment[nOuts]`: Output commitments
+
+## UTXO Structure
+
+Each UTXO (Unspent Transaction Output) contains:
+
+```javascript
+{
+  amount,       // Transaction amount
+  pubkey,       // Owner's public key
+  blinding,     // Random number for privacy
+  mintAddress   // Token mint (SOL or SPL token address)
+}
+```
+
+**Commitment:** `hash(amount, pubKey, blinding, mintAddress)`
+
+**Nullifier:** `hash(commitment, merklePath, sign(privKey, commitment, merklePath))`
+
+## Input Verification
+
+For each input UTXO, the circuit verifies:
+
+### 1. Keypair Derivation
+
+```circom
+inKeypair[tx] = Keypair();
+inKeypair[tx].privateKey <== inPrivateKey[tx];
+```
+
+The public key is derived from the private key using Poseidon hash:
+
+```circom
+template Keypair() {
+    signal input privateKey;
+    signal output publicKey;
+    
+    component hasher = Poseidon(1);
+    hasher.inputs[0] <== privateKey;
+    publicKey <== hasher.out;
+}
+```
+
+### 2. Commitment Calculation
+
+```circom
+inCommitmentHasher[tx] = Poseidon(4);
+inCommitmentHasher[tx].inputs[0] <== inAmount[tx];
+inCommitmentHasher[tx].inputs[1] <== inKeypair[tx].publicKey;
+inCommitmentHasher[tx].inputs[2] <== inBlinding[tx];
+inCommitmentHasher[tx].inputs[3] <== mintAddress;
+```
+
+The commitment uses a 4-input Poseidon hash over the UTXO fields.
+
+### 3. Signature Generation
+
+```circom
+inSignature[tx] = Signature();
+inSignature[tx].privateKey <== inPrivateKey[tx];
+inSignature[tx].commitment <== inCommitmentHasher[tx].out;
+inSignature[tx].merklePath <== inPathIndices[tx];
+```
+
+The signature is computed as:
+
+```circom
+template Signature() {
+    signal input privateKey;
+    signal input commitment;
+    signal input merklePath;
+    signal output out;
+    
+    component hasher = Poseidon(3);
+    hasher.inputs[0] <== privateKey;
+    hasher.inputs[1] <== commitment;
+    hasher.inputs[2] <== merklePath;
+    out <== hasher.out;
+}
+```
+
+### 4. Nullifier Computation
+
+```circom
+inNullifierHasher[tx] = Poseidon(3);
+inNullifierHasher[tx].inputs[0] <== inCommitmentHasher[tx].out;
+inNullifierHasher[tx].inputs[1] <== inPathIndices[tx];
+inNullifierHasher[tx].inputs[2] <== inSignature[tx].out;
+inNullifierHasher[tx].out === inputNullifier[tx];
+```
+
+The nullifier is derived from the commitment, merkle path, and signature. This ensures:
+- Only the owner can create a valid nullifier (requires private key)
+- Each UTXO can only be spent once (nullifier is deterministic)
+- Nullifiers cannot be linked to commitments without the private key
+
+### 5. Merkle Proof Verification
+
+```circom
+inTree[tx] = MerkleProof(levels);
+inTree[tx].leaf <== inCommitmentHasher[tx].out;
+inTree[tx].pathIndices <== inPathIndices[tx];
+for (var i = 0; i < levels; i++) {
+    inTree[tx].pathElements[i] <== inPathElements[tx][i];
+}
+
+inCheckRoot[tx] = ForceEqualIfEnabled();
+inCheckRoot[tx].in[0] <== root;
+inCheckRoot[tx].in[1] <== inTree[tx].root;
+inCheckRoot[tx].enabled <== inAmount[tx];
+```
+
+The Merkle proof verifies that the commitment exists in the tree with the given root. The verification is only enforced if the amount is non-zero, allowing dummy inputs.
+
+## Output Verification
+
+For each output UTXO:
+
+### 1. Commitment Generation
+
+```circom
+outCommitmentHasher[tx] = Poseidon(4);
+outCommitmentHasher[tx].inputs[0] <== outAmount[tx];
+outCommitmentHasher[tx].inputs[1] <== outPubkey[tx];
+outCommitmentHasher[tx].inputs[2] <== outBlinding[tx];
+outCommitmentHasher[tx].inputs[3] <== mintAddress;
+outCommitmentHasher[tx].out === outputCommitment[tx];
+```
+
+### 2. Amount Range Check
+
+```circom
+outAmountCheck[tx] = Num2Bits(248);
+outAmountCheck[tx].in <== outAmount[tx];
+```
+
+This constrains output amounts to 248 bits, preventing overflow attacks.
+
+## Invariants and Safety Checks
+
+### 1. Balance Conservation
+
+```circom
+sumIns + publicAmount === sumOuts;
+```
+
+The sum of inputs plus the public amount (deposit or negative for withdrawal) must equal the sum of outputs. This ensures no value is created or destroyed.
+
+### 2. Unique Nullifiers
+
+```circom
+component sameNullifiers[nIns * (nIns - 1) / 2];
+var index = 0;
+for (var i = 0; i < nIns - 1; i++) {
+  for (var j = i + 1; j < nIns; j++) {
+      sameNullifiers[index] = IsEqual();
+      sameNullifiers[index].in[0] <== inputNullifier[i];
+      sameNullifiers[index].in[1] <== inputNullifier[j];
+      sameNullifiers[index].out === 0;
+      index++;
+  }
+}
+```
+
+This pairwise comparison ensures no two inputs have the same nullifier within a single transaction.
+
+### 3. External Data Binding
+
+```circom
+signal extDataSquare <== extDataHash * extDataHash;
+```
+
+This constraint ensures the `extDataHash` is included in the witness and cannot be changed without invalidating the proof.
+
+## Merkle Proof Circuit
+
+The `MerkleProof` template verifies membership in a Poseidon-based Merkle tree:
+
+```circom
+template MerkleProof(levels) {
+    signal input leaf;
+    signal input pathElements[levels];
+    signal input pathIndices;
+    signal output root;
+    
+    component switcher[levels];
+    component hasher[levels];
+    
+    component indexBits = Num2Bits(levels);
+    indexBits.in <== pathIndices;
+    
+    for (var i = 0; i < levels; i++) {
+        switcher[i] = Switcher();
+        switcher[i].L <== i == 0 ? leaf : hasher[i - 1].out;
+        switcher[i].R <== pathElements[i];
+        switcher[i].sel <== indexBits.out[i];
+        
+        hasher[i] = Poseidon(2);
+        hasher[i].inputs[0] <== switcher[i].outL;
+        hasher[i].inputs[1] <== switcher[i].outR;
+    }
+    
+    root <== hasher[levels - 1].out;
+}
+```
+
+**How it works:**
+1. Convert `pathIndices` to binary representation
+2. For each level, use the index bit to determine left/right positioning
+3. Hash adjacent nodes using Poseidon(2)
+4. Climb the tree until reaching the root
+
+The `Switcher` component swaps left and right inputs based on the path index bit, ensuring the correct hash order.
+
+## Security Considerations
+
+### Input Validation
+
+- **No range check on inputs:** Input amounts are not range-checked because they must be valid outputs from previous transactions or zero-value dummy UTXOs.
+- **Output range check:** Output amounts are checked to fit in 248 bits to prevent overflow in `sumOuts`.
+
+### Overflow Prevention
+
+**Important:** `nIns` and `nOuts` must always be less than 16 to prevent `sumOuts` from overflowing. With 248-bit amounts and a maximum of 15 outputs, the sum is bounded by `15 * 2^248 < 2^252`, well within the field size.
+
+### Poseidon Hash Function
+
+All hashing uses Poseidon, a zk-SNARK-friendly hash function optimized for algebraic circuits. Poseidon provides:
+- High efficiency in constraint systems (fewer constraints than SHA-256)
+- Strong security guarantees
+- Resistance to algebraic attacks
+
+## Circuit Compilation
+
+The circuit is compiled to generate:
+1. **R1CS constraints:** Arithmetic constraints representing the circuit logic
+2. **Witness generation code:** JavaScript/WASM for computing circuit signals
+3. **Verification key:** Used for on-chain proof verification
+
+The final proof proves knowledge of:
+- Private keys for input UTXOs
+- Input amounts, blinding factors, and merkle paths
+- Output amounts, public keys, and blinding factors
+
+Without revealing any private information beyond the public inputs.

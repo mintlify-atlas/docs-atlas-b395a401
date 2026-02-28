@@ -1,0 +1,89 @@
+---
+title: "Error Codes"
+description: "Complete reference of error codes in the Privacy Cash program"
+---
+
+This page lists all error codes that can be returned by the Privacy Cash program. Understanding these errors will help you debug issues and handle edge cases in your application.
+
+## Program Error Codes
+
+The following errors are defined in the `ErrorCode` enum and can be returned by the main program instructions.
+
+| Code | Error Name | Description |
+|------|------------|-------------|
+| 6000 | `Unauthorized` | Not authorized to perform this action |
+| 6001 | `ExtDataHashMismatch` | External data hash does not match the one in the proof |
+| 6002 | `UnknownRoot` | Root is not known in the tree |
+| 6003 | `InvalidPublicAmountData` | Public amount is invalid |
+| 6004 | `InsufficientFundsForWithdrawal` | Insufficient funds for withdrawal |
+| 6005 | `InsufficientFundsForFee` | Insufficient funds for fee |
+| 6006 | `InvalidProof` | Proof is invalid |
+| 6007 | `InvalidFee` | Invalid fee: fee must be less than MAX_ALLOWED_VAL (2^248) |
+| 6008 | `InvalidExtAmount` | Invalid ext amount: absolute ext_amount must be less than MAX_ALLOWED_VAL (2^248) |
+| 6009 | `PublicAmountCalculationError` | Public amount calculation resulted in an overflow/underflow |
+| 6010 | `ArithmeticOverflow` | Arithmetic overflow/underflow occurred |
+| 6011 | `DepositLimitExceeded` | Deposit limit exceeded |
+| 6012 | `InvalidFeeRate` | Invalid fee rate: must be between 0 and 10000 basis points |
+| 6013 | `InvalidFeeRecipient` | Fee recipient does not match global configuration |
+| 6014 | `InvalidFeeAmount` | Fee amount is below minimum required (must be at least (1 - fee_error_margin) * expected_fee) |
+| 6015 | `RecipientMismatch` | Recipient account does not match the ExtData recipient |
+| 6016 | `MerkleTreeFull` | Merkle tree is full: cannot add more leaves |
+| 6017 | `InvalidTokenAccount` | Invalid token account: account is not owned by the token program |
+| 6018 | `InvalidMintAddress` | Invalid mint address: mint address is not allowed |
+| 6019 | `InvalidTokenAccountMintAddress` | Invalid token account mint address |
+
+## Groth16 Verification Errors
+
+The following errors are defined in the `Groth16Error` enum and are related to zero-knowledge proof verification.
+
+| Error Name | Description |
+|------------|-------------|
+| `InvalidG1Length` | Invalid G1 point length |
+| `InvalidG2Length` | Invalid G2 point length |
+| `InvalidPublicInputsLength` | Invalid public inputs length |
+| `PublicInputGreaterThanFieldSize` | Public input greater than field size |
+| `PreparingInputsG1MulFailed` | Preparing inputs G1 multiplication failed |
+| `PreparingInputsG1AdditionFailed` | Preparing inputs G1 addition failed |
+| `ProofVerificationFailed` | Proof verification failed |
+
+## Common Error Scenarios
+
+### Transaction Errors
+
+- **Unauthorized (6000)**: Occurs when attempting to call admin-only functions without proper authorization. Only the program authority can initialize trees or update configurations.
+
+- **InvalidProof (6006)**: The zero-knowledge proof verification failed. This typically means the proof was generated incorrectly or has been tampered with.
+
+- **UnknownRoot (6002)**: The Merkle root provided in the proof is not in the tree's root history. This can happen if the tree has been updated too many times since the proof was generated.
+
+### Amount and Fee Errors
+
+- **DepositLimitExceeded (6011)**: The deposit amount exceeds the maximum allowed deposit limit configured for the tree.
+
+- **InvalidFeeAmount (6014)**: The fee provided is below the minimum required amount based on the configured fee rate and error margin.
+
+- **InsufficientFundsForWithdrawal (6004)**: The tree's token account does not have enough funds to complete the withdrawal.
+
+- **InsufficientFundsForFee (6005)**: The tree's token account does not have enough funds to pay the transaction fee.
+
+### Token Errors
+
+- **InvalidMintAddress (6018)**: The SPL token mint address is not in the allowed tokens list (unless ALLOW_ALL_SPL_TOKENS is enabled).
+
+- **InvalidTokenAccount (6017)**: The token account is not owned by the SPL Token program.
+
+- **InvalidTokenAccountMintAddress (6019)**: The token account's mint does not match the expected mint address.
+
+### Data Validation Errors
+
+- **ExtDataHashMismatch (6001)**: The hash of the external data does not match the ext_data_hash in the proof. This indicates tampering or incorrect data.
+
+- **InvalidPublicAmountData (6003)**: The public amount calculation does not match the proof's public amount value.
+
+- **ArithmeticOverflow (6010)**: An arithmetic operation resulted in overflow or underflow during transaction processing.
+
+## Error Code Mapping
+
+Anchor automatically assigns error codes starting from 6000 for custom program errors. The error codes are sequential based on the order they appear in the `ErrorCode` enum.
+
+When an error occurs, the program will return the error code along with the error message. You can use these codes to implement proper error handling in your client application.

@@ -1,0 +1,478 @@
+---
+title: 'Privacy Model'
+description: 'Understand the privacy guarantees, limitations, and threat model of Privacy Cash'
+icon: 'eye-slash'
+---
+
+## Privacy Guarantees
+
+Privacy Cash provides **transaction privacy** by breaking the on-chain link between deposits and withdrawals. The system offers different privacy guarantees depending on usage patterns and the anonymity set.
+
+### What is Private?
+
+<CardGroup cols={2}>
+  <Card title="Transaction Linkage" icon="link-slash">
+    ✅ **Hidden**
+    
+    Deposits cannot be linked to withdrawals on-chain. Observers see commitments and nullifiers but cannot determine which deposit funded which withdrawal.
+  </Card>
+  
+  <Card title="Recipient Address" icon="user-secret">
+    ✅ **Hidden**
+    
+    Withdrawal recipients are encrypted in the proof. Only the recipient (or someone with the decryption key) knows they received funds.
+  </Card>
+  
+  <Card title="Amount Details" icon="coins">
+    ✅ **Partially Hidden**
+    
+    Deposit and withdrawal amounts are encrypted in commitments. However, external amounts (deposit/withdrawal size) are visible to enable pool accounting.
+  </Card>
+  
+  <Card title="Transaction Timing" icon="clock">
+    ⚠️ **Visible**
+    
+    Transaction timestamps are public on Solana. Timing analysis can reduce anonymity set if only one user is active in a time window.
+  </Card>
+</CardGroup>
+
+### What is Not Private?
+
+<Warning>
+**The following information is publicly visible on-chain:**
+
+- Deposit and withdrawal amounts (external amounts)
+- Transaction timestamps
+- Total pool balance
+- Number of commitments in the tree
+- Nullifier values (but not which commitment they correspond to)
+- Mint address (token type)
+</Warning>
+
+## Anonymity Set
+
+The **anonymity set** is the number of possible commitments that could have funded a withdrawal. Larger anonymity sets provide stronger privacy.
+
+<Info>
+**Example:**
+
+If 1,000 users have deposited 10 SOL into the pool, and you withdraw 10 SOL, your anonymity set is 1,000. An observer knows the withdrawal came from one of those deposits but cannot determine which one.
+</Info>
+
+### Factors Affecting Anonymity Set
+
+<Tabs>
+  <Tab title="Amount">
+    **Unique amounts reduce anonymity**
+    
+    If you deposit 3.14159 SOL (a unique amount), withdrawing exactly 3.14159 SOL creates a strong linkage.
+    
+    **Best practices:**
+    - Use round amounts (0.1, 1, 10 SOL)
+    - Split large deposits into common denominations
+    - Withdraw amounts different from deposit
+    
+    ```typescript Example
+    // Bad: Unique amount
+    await deposit(3.14159);
+    await withdraw(3.14159); // Easily linked!
+    
+    // Good: Common amounts with splitting
+    await deposit(10); // Creates 5 + 5 commitments
+    await deposit(10); // Creates 5 + 5 commitments  
+    await withdraw(7); // Uses commitments from both deposits
+    ```
+  </Tab>
+  
+  <Tab title="Timing">
+    **Short delays reduce anonymity**
+    
+    If you deposit and immediately withdraw, timing correlation can link the transactions even if amounts differ.
+    
+    **Best practices:**
+    - Wait hours or days between deposit and withdrawal
+    - Use the pool during high-activity periods
+    - Make multiple deposits over time
+    
+    <Note>
+    The Merkle tree maintains 100 historical roots, allowing withdrawals against older tree states. This provides flexibility in timing withdrawals.
+    </Note>
+  </Tab>
+  
+  <Tab title="Pool Activity">
+    **Low activity reduces anonymity**
+    
+    Privacy depends on other users. If you're the only one using the pool in a 24-hour window, you have no anonymity.
+    
+    **Mainnet statistics (as of Feb 2026):**
+    - Total commitments: ~45,000
+    - Active users: ~2,500
+    - Daily transactions: ~150-300
+    - Most common amounts: 0.1, 1, 5, 10 SOL
+    
+    <Tip>
+    Use the pool when activity is high to maximize your anonymity set. Check on-chain stats before making time-sensitive withdrawals.
+    </Tip>
+  </Tab>
+  
+  <Tab title="Token Type">
+    **Each token has separate anonymity**
+    
+    SOL and SPL tokens use separate Merkle trees. Your anonymity set for USDC is independent of SOL.
+    
+    | Token | Approx. Anonymity Set |
+    |-------|----------------------|
+    | SOL | ~35,000 commitments |
+    | USDC | ~8,000 commitments |
+    | ORE | ~1,500 commitments |
+    | USDT | ~800 commitments |
+    | Others | < 500 commitments |
+    
+    <Warning>
+    Smaller anonymity sets provide weaker privacy. Consider this when using less popular tokens.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Threat Model
+
+Understand who can see what information in different attack scenarios.
+
+### Passive Observers
+
+**Capabilities:**
+- Monitor all on-chain transactions
+- Analyze timing, amounts, and frequencies
+- Build statistical models of user behavior
+
+**What they can learn:**
+- Total pool balance and activity
+- Distribution of deposit/withdrawal amounts
+- Transaction patterns over time
+- Publicly associated addresses (if not using fresh wallets)
+
+**What they cannot learn (with proper usage):**
+- Which deposit funded which withdrawal
+- Identity of withdrawal recipients
+- Internal commitment amounts (only external amounts visible)
+
+<Accordion title="Mitigation Strategies">
+1. **Use fresh wallet addresses** for each deposit/withdrawal
+2. **Avoid unique amounts** that could correlate transactions
+3. **Add timing delays** between related transactions
+4. **Use multiple commitments** for large amounts
+5. **Withdraw to intermediate addresses** before final destination
+</Accordion>
+
+### Active Network Attackers
+
+**Additional capabilities:**
+- Monitor RPC requests and IP addresses
+- Analyze transaction submission patterns
+- Correlate wallet activity across applications
+
+**What they can learn:**
+- IP addresses submitting transactions (unless using VPN/Tor)
+- Wallet software and RPC endpoints being used
+- Correlation between deposits from same IP
+
+**What they cannot learn:**
+- On-chain linkage between transactions
+- Contents of encrypted outputs
+- Private keys or blinding factors
+
+<Accordion title="Mitigation Strategies">
+1. **Use privacy-preserving RPCs** or run your own node
+2. **Route traffic through VPN or Tor** when submitting transactions
+3. **Use different RPC endpoints** for deposits vs withdrawals
+4. **Consider relayer services** to hide your IP address
+</Accordion>
+
+### Malicious Relayers
+
+**Capabilities:**
+- See transaction details before submission
+- Know which user is making which withdrawal
+- Potentially censor or delay transactions
+
+**What they can learn:**
+- Your withdrawal recipient address
+- Your withdrawal timing and amount
+- Your IP address (if connecting directly)
+
+**What they cannot learn:**
+- Which deposit you're withdrawing from
+- Your private keys or commitment secrets
+- Contents of other users' transactions
+
+<Accordion title="Mitigation Strategies">
+1. **Self-relay** by submitting transactions directly
+2. **Use multiple relayers** to avoid single point of trust
+3. **Encrypt communications** with relayers
+4. **Verify relayer code** if possible (open source)
+</Accordion>
+
+### Compromised RPC Nodes
+
+**Capabilities:**
+- Log all RPC requests from users
+- Correlate requests with on-chain transactions
+- Potentially extract sensitive data from client state
+
+**What they can learn:**
+- Your deposit and withdrawal activity
+- Your IP address and client information
+- Timing of your queries and balance checks
+
+**What they cannot learn:**
+- Your private keys (if wallet is properly designed)
+- On-chain transaction linkages
+- Other users' activity
+
+<Accordion title="Mitigation Strategies">
+1. **Run your own RPC node** for maximum privacy
+2. **Use privacy-focused RPC providers** that don't log
+3. **Rotate between multiple RPC endpoints**
+4. **Use Tor or VPN** when connecting to RPC nodes
+</Accordion>
+
+## Privacy Best Practices
+
+<Steps>
+  <Step title="Choose Common Amounts">
+    Use standard denominations that many others use:
+    
+    **Recommended amounts:**
+    - 0.1 SOL (small transactions)
+    - 1 SOL (medium transactions)
+    - 5 SOL (larger transactions)
+    - 10 SOL (maximum recommended per commitment)
+    
+    Avoid unique amounts like 3.14159 or 7.77777 SOL.
+  </Step>
+  
+  <Step title="Add Timing Delays">
+    Wait between deposit and withdrawal to prevent timing correlation:
+    
+    **Recommended delays:**
+    - Minimum: 1 hour
+    - Good: 24 hours
+    - Best: Several days
+    
+    Consider the pool's activity level when choosing delays.
+  </Step>
+  
+  <Step title="Use Fresh Addresses">
+    Generate new wallet addresses for each interaction:
+    
+    ```typescript
+    // Separate keypairs for each stage
+    const depositWallet = Keypair.generate();
+    const withdrawalWallet = Keypair.generate();
+    const finalDestination = Keypair.generate();
+    
+    // Fund deposit wallet from exchange
+    // Deposit → Wait → Withdraw to final destination
+    ```
+  </Step>
+  
+  <Step title="Split Large Amounts">
+    Break large deposits into multiple smaller commitments:
+    
+    ```typescript
+    // Instead of:
+    await deposit(100); // ❌ Large, traceable
+    
+    // Do this:
+    await deposit(10); // ✅ 10 separate deposits
+    await deposit(10);
+    // ... (8 more times)
+    ```
+    
+    This increases your anonymity set and provides flexibility in withdrawals.
+  </Step>
+  
+  <Step title="Use Relayers Wisely">
+    Relayers can enhance privacy but require trust:
+    
+    **When to use relayers:**
+    - You want to hide your IP address
+    - You don't have SOL for withdrawal fees
+    - You want to automate withdrawals
+    
+    **When to self-relay:**
+    - Maximum privacy is required
+    - You have technical capability
+    - You're withdrawing large amounts
+  </Step>
+</Steps>
+
+## Privacy Limitations
+
+<Warning>
+**Privacy Cash cannot protect against all attacks. Be aware of these limitations:**
+</Warning>
+
+<AccordionGroup>
+  <Accordion title="Network-Level Privacy">
+    Privacy Cash provides **on-chain transaction privacy** but does not protect network-level metadata.
+    
+    **Not protected:**
+    - Your IP address when connecting to RPC nodes
+    - Transaction submission timing at network level
+    - Correlation with other blockchain activity
+    
+    **Solution:** Use VPN, Tor, or privacy-focused RPC providers.
+  </Accordion>
+  
+  <Accordion title="Amount Privacy">
+    External amounts (deposits/withdrawals) are visible on-chain. This is necessary for pool accounting but limits amount privacy.
+    
+    **Visible:**
+    - Deposit and withdrawal amounts
+    - Net flow in/out of the pool
+    
+    **Hidden:**
+    - Internal commitment amounts (encrypted)
+    - Which commitment has which amount
+    
+    **Solution:** Use common amounts and split large deposits.
+  </Accordion>
+  
+  <Accordion title="Small Anonymity Sets">
+    If few users are in the pool, privacy is limited even with perfect operational security.
+    
+    **Risk scenarios:**
+    - New token pools with < 100 users
+    - Deposits during low-activity periods
+    - Unique amounts with only one matching deposit
+    
+    **Solution:** Use established pools (SOL, USDC) and avoid unique amounts.
+  </Accordion>
+  
+  <Accordion title="Sophisticated Analysis">
+    Advanced attackers may use machine learning and statistical analysis to reduce anonymity.
+    
+    **Possible attacks:**
+    - Timing analysis across multiple transactions
+    - Amount correlation with external data sources
+    - Behavioral fingerprinting of users
+    
+    **Solution:** Follow best practices consistently and use multiple privacy-enhancing techniques together.
+  </Accordion>
+</AccordionGroup>
+
+## Privacy Metrics
+
+You can estimate your privacy level using these metrics:
+
+### Effective Anonymity Set
+
+```typescript Calculate Anonymity Set
+function calculateAnonymitySet(
+  amount: number,
+  timestamp: Date,
+  token: string
+): number {
+  // Count commitments with:
+  // 1. Same token type
+  // 2. Similar amount (±10%)
+  // 3. Created before withdrawal
+  // 4. Not yet spent
+  
+  const matchingCommitments = commitments.filter(c => 
+    c.token === token &&
+    Math.abs(c.amount - amount) / amount < 0.1 &&
+    c.timestamp < timestamp &&
+    !c.spent
+  );
+  
+  return matchingCommitments.length;
+}
+```
+
+### Privacy Score
+
+<Tabs>
+  <Tab title="Excellent (90-100)">
+    ✅ **Strong privacy guarantees**
+    
+    - Anonymity set > 1,000
+    - Common amount (0.1, 1, 5, 10)
+    - Delay > 24 hours
+    - Fresh addresses used
+    - Active pool period
+  </Tab>
+  
+  <Tab title="Good (70-89)">
+    ✅ **Reasonable privacy**
+    
+    - Anonymity set > 100
+    - Somewhat common amount
+    - Delay > 1 hour
+    - Some address reuse
+    - Moderate pool activity
+  </Tab>
+  
+  <Tab title="Fair (50-69)">
+    ⚠️ **Limited privacy**
+    
+    - Anonymity set > 10
+    - Uncommon amount
+    - Short delay
+    - Address reuse
+    - Low pool activity
+  </Tab>
+  
+  <Tab title="Poor (0-49)">
+    ❌ **Weak privacy**
+    
+    - Anonymity set < 10
+    - Unique amount
+    - No delay
+    - Same addresses
+    - Very low activity
+    
+    <Warning>
+    Consider waiting for better conditions or using a different privacy solution.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Comparison with Other Privacy Solutions
+
+| Feature | Privacy Cash | Monero | Tornado Cash | Zcash (Shielded) |
+|---------|--------------|---------|--------------|------------------|
+| **Blockchain** | Solana | Monero | Ethereum/L2s | Zcash |
+| **Privacy Model** | UTXO pool | Ring signatures | Pool-based | Shielded pool |
+| **Transaction Privacy** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Amount Privacy** | ⚠️ Partial | ✅ Full | ⚠️ Partial | ✅ Full |
+| **Recipient Privacy** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Speed** | Very fast (Solana) | Slow (~2 min) | Medium (Ethereum) | Medium (~75 sec) |
+| **Costs** | Very low | Low | High (gas) | Low |
+| **Audited** | ✅ Yes (4 audits) | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Trust Required** | None (smart contract) | None (protocol) | None (smart contract) | None (protocol) |
+
+<Info>
+Privacy Cash offers a strong balance between privacy, speed, and cost on Solana. For maximum amount privacy, consider combining Privacy Cash with other techniques like swapping or splitting amounts.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Zero-Knowledge Proofs" icon="key" href="/concepts/zero-knowledge-proofs">
+    Learn how ZK proofs enable privacy without trusted parties
+  </Card>
+  
+  <Card title="Commitments & Nullifiers" icon="fingerprint" href="/concepts/commitments-and-nullifiers">
+    Understand the cryptographic primitives that prevent double-spending
+  </Card>
+  
+  <Card title="Integration Guide" icon="code" href="/integration/overview">
+    Start integrating Privacy Cash into your application
+  </Card>
+  
+  <Card title="Security Best Practices" icon="shield-check" href="/security/best-practices">
+    Learn how to use Privacy Cash securely
+  </Card>
+</CardGroup>

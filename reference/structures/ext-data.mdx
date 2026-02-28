@@ -1,0 +1,114 @@
+---
+title: "ExtData"
+description: "External transaction data structure containing recipient, amount, fee, and token information"
+---
+
+The `ExtData` struct contains the public transaction parameters that are not part of the zero-knowledge circuit but are committed to via the `ext_data_hash` in the proof.
+
+## Structure Definition
+
+<ResponseField name="recipient" type="Pubkey" required>
+  The recipient of the transaction. For SOL transactions, this is the wallet address. For SPL token transactions, this is the recipient's token account address.
+</ResponseField>
+
+<ResponseField name="ext_amount" type="i64" required>
+  The external amount being deposited or withdrawn:
+  - Positive values indicate deposits (funds moving into the privacy pool)
+  - Negative values indicate withdrawals (funds moving out of the privacy pool)
+  - Zero indicates a shielded transfer (no external funds movement)
+</ResponseField>
+
+<ResponseField name="fee" type="u64" required>
+  The transaction fee in lamports (for SOL) or token base units (for SPL tokens). This fee is paid to the relayer or fee recipient.
+</ResponseField>
+
+<ResponseField name="fee_recipient" type="Pubkey" required>
+  The account that will receive the transaction fee. For SOL transactions, this is a wallet address. For SPL token transactions, this is an associated token account.
+</ResponseField>
+
+<ResponseField name="mint_address" type="Pubkey" required>
+  The SPL token mint address for SPL token transactions, or a special SOL address constant for native SOL transactions.
+</ResponseField>
+
+## ExtDataMinified
+
+To optimize transaction size and costs, clients pass a minified version of ExtData to the program:
+
+```rust
+pub struct ExtDataMinified {
+    pub ext_amount: i64,
+    pub fee: u64,
+}
+```
+
+The full `ExtData` is reconstructed on-chain using context accounts:
+
+### For SOL Transactions
+
+```rust
+fn from_minified(ctx: &Context<Transact>, minified: ExtDataMinified) -> Self {
+    Self {
+        recipient: ctx.accounts.recipient.key(),
+        ext_amount: minified.ext_amount,
+        fee: minified.fee,
+        fee_recipient: ctx.accounts.fee_recipient_account.key(),
+        mint_address: utils::SOL_ADDRESS,
+    }
+}
+```
+
+### For SPL Token Transactions
+
+```rust
+fn from_minified_spl(ctx: &Context<TransactSpl>, minified: ExtDataMinified) -> Self {
+    Self {
+        recipient: ctx.accounts.recipient_token_account.key(),
+        ext_amount: minified.ext_amount,
+        fee: minified.fee,
+        fee_recipient: ctx.accounts.fee_recipient_ata.key(),
+        mint_address: ctx.accounts.mint.key(),
+    }
+}
+```
+
+## Hash Calculation
+
+The ExtData is hashed using the `calculate_complete_ext_data_hash` utility function:
+
+```rust
+let calculated_ext_data_hash = utils::calculate_complete_ext_data_hash(
+    ext_data.recipient,
+    ext_data.ext_amount,
+    &encrypted_output1,
+    &encrypted_output2,
+    ext_data.fee,
+    ext_data.fee_recipient,
+    ext_data.mint_address,
+)?;
+```
+
+This hash is compared against the `ext_data_hash` in the proof to ensure the transaction parameters match what was committed to in the zero-knowledge proof.
+
+## Fee Validation
+
+The program validates fees based on the transaction type:
+
+- **Deposits** (`ext_amount > 0`): Fee must match the `deposit_fee_rate` from global config
+- **Withdrawals** (`ext_amount < 0`): Fee must match the `withdrawal_fee_rate` from global config
+- **Shielded Transfers** (`ext_amount == 0`): No fee validation (can be zero)
+
+Fees are calculated in basis points with an allowed error margin:
+
+```rust
+utils::validate_fee(
+    ext_amount,
+    fee,
+    global_config.deposit_fee_rate,
+    global_config.withdrawal_fee_rate,
+    global_config.fee_error_margin,
+)?;
+```
+
+## Related Types
+
+- [Proof](/reference/structures/proof) - Contains the `ext_data_hash` that commits to this ExtData

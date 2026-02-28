@@ -1,0 +1,352 @@
+---
+title: 'Basic Usage'
+description: 'Core operations with the Privacy Cash SDK'
+icon: 'code'
+---
+
+## Creating UTXOs
+
+UTXOs are the fundamental building blocks for private transactions. Each UTXO represents an unspent output with an amount and cryptographic commitments.
+
+### Empty UTXO
+
+Create an empty UTXO (used as placeholder in transactions):
+
+```typescript
+import { Utxo } from '@privacy-cash/sdk';
+import { WasmFactory } from '@lightprotocol/hasher.rs';
+import BN from 'bn.js';
+
+const lightWasm = await WasmFactory.getInstance();
+
+const emptyUtxo = new Utxo({ lightWasm });
+// Amount defaults to 0
+```
+
+### UTXO with Amount
+
+Create a UTXO with a specific amount:
+
+```typescript
+const utxo = new Utxo({
+  lightWasm,
+  amount: new BN(1000000), // 0.001 SOL (in lamports)
+});
+```
+
+### SPL Token UTXO
+
+Create a UTXO for SPL tokens:
+
+```typescript
+import { PublicKey } from '@solana/web3.js';
+
+const usdcMint = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+
+const splUtxo = new Utxo({
+  lightWasm,
+  amount: new BN(1000000), // 1 USDC (6 decimals)
+  mintAddress: usdcMint.toBase58(),
+});
+```
+
+### UTXO Properties
+
+Access UTXO properties:
+
+```typescript
+console.log('Amount:', utxo.amount.toString());
+console.log('Public Key:', utxo.keypair.pubkey.toString());
+console.log('Blinding:', utxo.blinding.toString());
+console.log('Index:', utxo.index);
+console.log('Mint:', utxo.mintAddress);
+```
+
+## Generating Commitments
+
+Commitments are Poseidon hashes that hide UTXO details while allowing verification:
+
+```typescript
+const commitment = await utxo.getCommitment();
+console.log('Commitment:', commitment);
+// Output: "12345678901234567890123456789012" (32-byte hash as string)
+```
+
+The commitment formula:
+
+```
+commitment = PoseidonHash(amount, pubkey, blinding, mintAddress)
+```
+
+## Generating Nullifiers
+
+Nullifiers mark UTXOs as spent, preventing double-spending:
+
+```typescript
+const nullifier = await utxo.getNullifier();
+console.log('Nullifier:', nullifier);
+// Output: "98765432109876543210987654321098" (32-byte hash as string)
+```
+
+The nullifier formula:
+
+```
+signature = PoseidonSign(privateKey, commitment, index)
+nullifier = PoseidonHash(commitment, index, signature)
+```
+
+<Warning>
+  Nullifiers are unique per UTXO and must be tracked to prevent double-spending.
+</Warning>
+
+## Building Merkle Trees
+
+Merkle trees track all commitments in the privacy pool:
+
+```typescript
+import { MerkleTree } from '@privacy-cash/sdk';
+
+const DEFAULT_HEIGHT = 26; // Tree depth
+const merkleTree = new MerkleTree(DEFAULT_HEIGHT, lightWasm);
+
+// Insert commitments
+const commitment1 = await utxo1.getCommitment();
+const commitment2 = await utxo2.getCommitment();
+
+merkleTree.insert(commitment1);
+merkleTree.insert(commitment2);
+
+// Get root
+const root = merkleTree.root();
+console.log('Merkle root:', root);
+
+// Get Merkle path for a commitment
+const index = merkleTree.indexOf(commitment1);
+const path = merkleTree.path(index);
+console.log('Path elements:', path.pathElements);
+console.log('Path indices:', path.pathIndices);
+```
+
+### Merkle Path Structure
+
+From test files at `~/workspace/source/anchor/tests/sol_tests.ts:966-982`:
+
+```typescript
+const withdrawalInputMerklePathIndices = [];
+const withdrawalInputMerklePathElements = [];
+
+for (let i = 0; i < inputs.length; i++) {
+  const input = inputs[i];
+  if (input.amount.gt(new BN(0))) {
+    // For non-empty UTXOs, get the actual Merkle path
+    const commitment = outputCommitments[i];
+    input.index = merkleTree.indexOf(commitment);
+    
+    withdrawalInputMerklePathIndices.push(input.index);
+    withdrawalInputMerklePathElements.push(merkleTree.path(input.index).pathElements);
+  } else {
+    // For empty UTXOs, use zero path
+    withdrawalInputMerklePathIndices.push(0);
+    withdrawalInputMerklePathElements.push(new Array(merkleTree.levels).fill(0));
+  }
+}
+```
+
+## Calculating External Data Hash
+
+The external data hash binds transaction metadata to the proof:
+
+```typescript
+import { getExtDataHash } from '@privacy-cash/sdk';
+import { PublicKey } from '@solana/web3.js';
+import BN from 'bn.js';
+
+const extData = {
+  recipient: new PublicKey('RecipientAddress...'),
+  extAmount: new BN(1000000), // Positive for deposits, negative for withdrawals
+  encryptedOutput1: Buffer.from('encrypted_data_1'),
+  encryptedOutput2: Buffer.from('encrypted_data_2'),
+  fee: new BN(3500), // 0.35% of withdrawal amount
+  feeRecipient: new PublicKey('AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM'),
+  mintAddress: new PublicKey('11111111111111111111111111111112'), // SOL
+};
+
+const extDataHash = getExtDataHash(extData);
+console.log('ExtData Hash:', Buffer.from(extDataHash).toString('hex'));
+```
+
+### External Data Structure
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `recipient` | `PublicKey` | Destination address for funds |
+| `extAmount` | `BN` | Positive for deposits, negative for withdrawals |
+| `encryptedOutput1` | `Buffer` | Encrypted UTXO data for output 1 |
+| `encryptedOutput2` | `Buffer` | Encrypted UTXO data for output 2 |
+| `fee` | `BN` | Transaction fee amount |
+| `feeRecipient` | `PublicKey` | Fee recipient address |
+| `mintAddress` | `PublicKey` | Token mint address |
+
+## Generating Zero-Knowledge Proofs
+
+Proofs verify transaction validity without revealing details:
+
+```typescript
+import { prove } from '@privacy-cash/sdk';
+import path from 'path';
+
+// Prepare circuit inputs
+const circuitInput = {
+  root: merkleTree.root(),
+  publicAmount: new BN(1000000).toString(),
+  extDataHash: extDataHash,
+  mintAddress: '11111111111111111111111111111112',
+  
+  inputNullifier: await Promise.all(inputs.map(x => x.getNullifier())),
+  inAmount: inputs.map(x => x.amount.toString(10)),
+  inPrivateKey: inputs.map(x => x.keypair.privkey),
+  inBlinding: inputs.map(x => x.blinding.toString(10)),
+  inPathIndices: inputMerklePathIndices,
+  inPathElements: inputMerklePathElements,
+  
+  outputCommitment: await Promise.all(outputs.map(x => x.getCommitment())),
+  outAmount: outputs.map(x => x.amount.toString(10)),
+  outBlinding: outputs.map(x => x.blinding.toString(10)),
+  outPubkey: outputs.map(x => x.keypair.pubkey),
+};
+
+// Generate proof
+const keyBasePath = path.resolve('./circuits/transaction2');
+const { proof, publicSignals } = await prove(circuitInput, keyBasePath);
+```
+
+### Parse Proof for On-Chain Submission
+
+From test files at `~/workspace/source/anchor/tests/sol_tests.ts:772-791`:
+
+```typescript
+import { parseProofToBytesArray, parseToBytesArray } from '@privacy-cash/sdk';
+
+const proofInBytes = parseProofToBytesArray(proof);
+const inputsInBytes = parseToBytesArray(publicSignals);
+
+const proofToSubmit = {
+  proofA: proofInBytes.proofA,
+  proofB: proofInBytes.proofB.flat(),
+  proofC: proofInBytes.proofC,
+  root: inputsInBytes[0],
+  publicAmount: inputsInBytes[1],
+  extDataHash: inputsInBytes[2],
+  inputNullifiers: [
+    inputsInBytes[3],
+    inputsInBytes[4]
+  ],
+  outputCommitments: [
+    inputsInBytes[5],
+    inputsInBytes[6]
+  ],
+};
+```
+
+## Calculating Fees
+
+Fee calculation from test files at `~/workspace/source/anchor/tests/sol_tests.ts:22-38`:
+
+```typescript
+const DEPOSIT_FEE_RATE = 0; // 0% - Free deposits
+const WITHDRAW_FEE_RATE = 35; // 0.35%
+
+function calculateFee(amount: number, feeRate: number): number {
+  return Math.floor((amount * feeRate) / 10000);
+}
+
+function calculateDepositFee(amount: number): number {
+  return calculateFee(amount, DEPOSIT_FEE_RATE); // Returns 0
+}
+
+function calculateWithdrawalFee(amount: number): number {
+  return calculateFee(amount, WITHDRAW_FEE_RATE);
+}
+
+// Example: Withdraw 1,000,000 lamports (0.001 SOL)
+const withdrawAmount = 1000000;
+const fee = calculateWithdrawalFee(withdrawAmount);
+console.log('Withdrawal fee:', fee); // 3,500 lamports (0.0000035 SOL)
+```
+
+## Finding Program-Derived Addresses
+
+Nullifier accounts use PDAs to prevent double-spending:
+
+```typescript
+import { PublicKey } from '@solana/web3.js';
+
+function findNullifierPDAs(programId: PublicKey, proof: any) {
+  const [nullifier0PDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from('nullifier0'), Buffer.from(proof.inputNullifiers[0])],
+    programId
+  );
+  
+  const [nullifier1PDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from('nullifier1'), Buffer.from(proof.inputNullifiers[1])],
+    programId
+  );
+  
+  return { nullifier0PDA, nullifier1PDA };
+}
+
+// Cross-check nullifiers (anti-double-spend protection)
+function findCrossCheckNullifierPDAs(programId: PublicKey, proof: any) {
+  const [nullifier2PDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from('nullifier0'), Buffer.from(proof.inputNullifiers[1])],
+    programId
+  );
+
+  const [nullifier3PDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from('nullifier1'), Buffer.from(proof.inputNullifiers[0])],
+    programId
+  );
+
+  return { nullifier2PDA, nullifier3PDA };
+}
+```
+
+<Info>
+  The cross-check nullifiers prevent attackers from reusing the same UTXO in different input positions.
+</Info>
+
+## Constants and Configuration
+
+From `~/workspace/source/anchor/tests/lib/constants.ts`:
+
+```typescript
+import { PublicKey } from '@solana/web3.js';
+import BN from 'bn.js';
+
+export const ROOT_HISTORY_SIZE = 100;
+export const DEFAULT_HEIGHT = 26; // Merkle tree depth
+export const FIELD_SIZE = new BN(
+  '21888242871839275222246405745257275088548364400416034343698204186575808495617'
+);
+
+export const FEE_RECIPIENT_ACCOUNT = new PublicKey(
+  'AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM'
+);
+
+export const DEPOSIT_FEE_RATE = 0; // 0%
+export const WITHDRAW_FEE_RATE = 35; // 0.35%
+
+// SOL mint address constant
+const SOL_ADDRESS = new PublicKey('11111111111111111111111111111112');
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Examples" icon="book" href="/sdk/examples">
+    View complete transaction examples
+  </Card>
+  <Card title="API Reference" icon="brackets-curly" href="/api-reference/introduction">
+    Explore detailed API documentation
+  </Card>
+</CardGroup>

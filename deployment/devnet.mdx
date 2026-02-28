@@ -1,0 +1,221 @@
+---
+title: Devnet Deployment
+description: Deploy and initialize Privacy Cash on Solana devnet
+---
+
+Devnet is the ideal environment for testing Privacy Cash before deploying to mainnet. This guide covers building, deploying, and initializing the program on devnet.
+
+## Program Information
+
+- **Network**: Solana Devnet
+- **Program ID**: `ATZj4jZ4FFzkvAcvk27DW9GRkgSbFnHo49fKKPQXU7VS`
+- **RPC Endpoint**: Custom Helius endpoint (configured in scripts)
+
+## Build the Program
+
+<Steps>
+  <Step title="Navigate to Anchor Directory">
+    ```bash
+    cd anchor
+    ```
+  </Step>
+  
+  <Step title="Build with Devnet Features">
+    Build the program with devnet-specific features:
+    
+    ```bash
+    anchor build -- --features devnet
+    ```
+    
+    Or build with verifiable flag:
+    
+    ```bash
+    anchor build --verifiable
+    ```
+  </Step>
+  
+  <Step title="Copy Program Keypair">
+    Copy the program keypair to the deployment directory:
+    
+    ```bash
+    rm target/deploy/zkcash-keypair.json
+    cp zkcash-keypair.json target/deploy/zkcash-keypair.json
+    ```
+  </Step>
+</Steps>
+
+## Deploy to Devnet
+
+You have multiple deployment options:
+
+### Option 1: Using Anchor Deploy
+
+```bash
+anchor deploy --provider.cluster devnet
+```
+
+### Option 2: Verifiable Deployment
+
+For transparency and auditability:
+
+```bash
+anchor deploy --verifiable --provider.cluster devnet
+```
+
+### Option 3: Using Solana CLI
+
+Direct deployment with Solana CLI:
+
+```bash
+solana program deploy target/deploy/zkcash.so \
+  --program-id zkcash-keypair.json \
+  --upgrade-authority ./deploy-keypair.json
+```
+
+<Note>
+Ensure your `deploy-keypair.json` has sufficient SOL for deployment. You can request devnet SOL from the faucet:
+
+```bash
+solana airdrop 2 <your-address> --url devnet
+```
+</Note>
+
+## Initialize the Program
+
+After deployment, initialize the program state.
+
+### Initialize SOL Tree
+
+Run the initialization script to set up the main SOL privacy pool:
+
+```bash
+cd ../scripts
+npm install
+npx ts-node initialize_devnet.ts
+```
+
+This script:
+- Derives required PDAs (Program Derived Addresses)
+- Creates the Merkle tree account for SOL deposits
+- Initializes the global configuration
+- Sets up the tree token account
+
+**Key Configuration**:
+- Tree Height: 26 (supports ~67M leaves)
+- Root History Size: 100
+- Fee Recipient: `DTqtRSGtGf414yvMPypCv2o1P8trwb9SJXibxLgAWYhw`
+- Deposit Fee: 0% (free deposits)
+- Withdrawal Fee: 0.25% (25 basis points)
+
+### Initialize SPL Token Tree
+
+To enable privacy for SPL tokens (e.g., USDC), initialize a separate tree:
+
+```bash
+npx ts-node initialize_spl_tree_devnet.ts
+```
+
+This script:
+- Creates a tree account specific to the SPL token mint
+- Sets maximum deposit limits
+- Configures token-specific parameters
+
+**Configuration**:
+- USDC Mint (Devnet): `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`
+- Max Deposit: 100,000 USDC
+
+<Warning>
+The global config must be initialized first (via `initialize_devnet.ts`) before initializing SPL token trees.
+</Warning>
+
+## Verify Initialization
+
+After initialization, verify the accounts on Solana Explorer:
+
+### Check SOL Tree Account
+
+```bash
+solana account <tree-account-address> --url devnet
+```
+
+Or view on [Solana Explorer](https://explorer.solana.com/?cluster=devnet)
+
+### Verify PDAs
+
+The initialization scripts output the derived PDA addresses:
+
+- **Tree Account**: Stores the Merkle tree state
+- **Tree Token Account**: Holds deposited SOL/tokens
+- **Global Config**: Stores program-wide configuration
+
+## Common Issues
+
+### Program Already Initialized
+
+If you see:
+
+```
+⚠️  Program already initialized on devnet!
+```
+
+The program state already exists. To reinitialize:
+1. Close existing accounts (if you have authority)
+2. Use a different program ID
+3. Continue with existing deployment
+
+### Insufficient Balance
+
+```bash
+# Check your balance
+solana balance --url devnet
+
+# Request airdrop if needed
+solana airdrop 2 --url devnet
+```
+
+### RPC Errors
+
+The scripts use Helius RPC endpoints. If you encounter rate limits, you can:
+- Use your own RPC endpoint
+- Modify the connection URL in the scripts
+- Add delays between transactions
+
+## Testing Your Deployment
+
+<Steps>
+  <Step title="Run Unit Tests">
+    ```bash
+    cd ../anchor
+    cargo test
+    ```
+  </Step>
+  
+  <Step title="Run Integration Tests">
+    Test SOL transfers:
+    ```bash
+    npm run test:sol
+    ```
+    
+    Test SPL token transfers:
+    ```bash
+    npm run test:spl
+    ```
+    
+    Test with mint-checked instruction:
+    ```bash
+    npm run test:mint-checked
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Mainnet Deployment" icon="rocket" href="/deployment/mainnet">
+    Ready for production? Deploy to mainnet
+  </Card>
+  
+  <Card title="Verification" icon="shield-check" href="/deployment/verification">
+    Verify your build matches the deployment
+  </Card>
+</CardGroup>

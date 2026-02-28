@@ -1,0 +1,47 @@
+---
+title: TreeTokenAccount
+description: PDA account that holds native SOL deposits and withdrawals
+---
+
+## Overview
+
+The `TreeTokenAccount` is a Program Derived Address (PDA) that serves as the custody account for native SOL in the Privacy Cash protocol. All SOL deposits are transferred to this account, and all SOL withdrawals are paid from it.
+
+## Account Structure
+
+<ResponseField name="authority" type="Pubkey" required>
+  The public key of the authority that can update this account's configuration
+</ResponseField>
+
+<ResponseField name="bump" type="u8" required>
+  The PDA bump seed used for account derivation
+</ResponseField>
+
+## PDA Seeds
+
+```
+[b"tree_token"]
+```
+
+## Usage
+
+### Deposits
+When users deposit SOL:
+1. User transfers SOL from their wallet to the `TreeTokenAccount`
+2. The deposit amount is validated against the `max_deposit_amount` limit
+3. Commitment is added to the Merkle tree
+
+### Withdrawals
+When users withdraw SOL:
+1. User provides a valid zero-knowledge proof
+2. SOL is transferred from `TreeTokenAccount` to the recipient
+3. Fees (if any) are transferred from `TreeTokenAccount` to the fee recipient
+4. The account must maintain rent-exempt balance
+
+## Notes
+
+- This account is used only for native SOL, not SPL tokens
+- For SPL tokens, Associated Token Accounts (ATAs) are used instead
+- The account is a PDA, meaning it has no private key and can only be controlled by the program
+- Transfers from this account use `try_borrow_mut_lamports()` to directly modify lamport balances
+- The account must always maintain enough lamports to remain rent-exempt

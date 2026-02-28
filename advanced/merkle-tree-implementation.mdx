@@ -1,0 +1,395 @@
+---
+title: 'Merkle Tree Implementation'
+description: 'Efficient sparse Merkle tree for commitment tracking'
+---
+
+# Merkle Tree Implementation
+
+Privacy Cash uses a sparse Merkle tree to store commitments on-chain. The tree enables efficient membership proofs while maintaining constant-size state.
+
+## Overview
+
+The Merkle tree implementation is adapted from [Light Protocol](https://github.com/Lightprotocol/light-protocol) and provides:
+- Efficient append-only operations
+- Poseidon hashing for zk-SNARK compatibility
+- Root history for asynchronous proof generation
+- Optimized storage using subtree caching
+
+## Tree Structure
+
+**Height:** 26 levels (configurable)
+
+**Capacity:** 2^26 = 67,108,864 leaves
+
+**Hash function:** Poseidon (2-to-1 compression)
+
+The tree stores commitment values as leaves and maintains:
+- Current root
+- Root history (circular buffer)
+- Subtree cache for efficient appends
+- Next available leaf index
+
+## Account Structure
+
+```rust
+pub struct MerkleTreeAccount {
+    pub height: u32,
+    pub next_index: u64,
+    pub root: [u8; 32],
+    pub root_index: u64,
+    pub root_history_size: u32,
+    pub root_history: Vec<[u8; 32]>,
+    pub subtrees: Vec<[u8; 32]>,
+}
+```
+
+**Fields:**
+- `height`: Tree depth (26 for Privacy Cash)
+- `next_index`: Next available leaf position
+- `root`: Current Merkle root
+- `root_index`: Position in circular root history buffer
+- `root_history_size`: Size of root history buffer
+- `root_history`: Circular buffer of recent roots
+- `subtrees`: Cache of rightmost subtree hashes at each level
+
+## Initialization
+
+```rust
+pub fn initialize<H: Hasher>(tree_account: &mut MerkleTreeAccount) -> Result<()> {
+    let height = tree_account.height as usize;
+    
+    // Initialize empty subtrees
+    let zero_bytes = H::zero_bytes();
+    for i in 0..height {
+        tree_account.subtrees[i] = zero_bytes[i];
+    }
+    
+    // Set initial root
+    let initial_root = H::zero_bytes()[height];
+    tree_account.root = initial_root;
+    tree_account.root_history[0] = initial_root;
+    
+    Ok(())
+}
+```
+
+**Zero bytes:**
+
+The tree uses pre-computed hashes of empty subtrees:
+```
+zero_bytes[0] = 0  (empty leaf)
+zero_bytes[1] = H(zero_bytes[0], zero_bytes[0])
+zero_bytes[2] = H(zero_bytes[1], zero_bytes[1])
+...
+zero_bytes[height] = H(zero_bytes[height-1], zero_bytes[height-1])
+```
+
+This allows efficient handling of empty branches without computing hashes.
+
+## Appending Leaves
+
+The `append` function adds a new commitment to the tree:
+
+```rust
+pub fn append<H: Hasher>(
+    leaf: [u8; 32],
+    tree_account: &mut MerkleTreeAccount,
+) -> Result<Vec<[u8; 32]>> {
+    let height = tree_account.height as usize;
+    let root_history_size = tree_account.root_history_size as usize;
+    
+    // Check if tree is full before appending
+    let max_capacity = 1u64 << height; // 2^height
+    require!(
+        tree_account.next_index < max_capacity,
+        ErrorCode::MerkleTreeFull
+    );
+    
+    let mut current_index = tree_account.next_index as usize;
+    let mut current_level_hash = leaf;
+    let mut left;
+    let mut right;
+    let mut proof: Vec<[u8; 32]> = vec![[0u8; 32]; height];
+    
+    for i in 0..height {
+        let subtree = &mut tree_account.subtrees[i];
+        let zero_byte = H::zero_bytes()[i];
+        
+        if current_index % 2 == 0 {
+            left = current_level_hash;
+            right = zero_byte;
+            *subtree = current_level_hash;
+            proof[i] = right;
+        } else {
+            left = *subtree;
+            right = current_level_hash;
+            proof[i] = left;
+        }
+        current_level_hash = H::hashv(&[&left, &right]).unwrap();
+        current_index /= 2;
+    }
+    
+    tree_account.root = current_level_hash;
+    tree_account.next_index = tree_account.next_index
+        .checked_add(1)
+        .ok_or(ErrorCode::ArithmeticOverflow)?;
+    
+    let new_root_index = (tree_account.root_index as usize)
+        .checked_add(1)
+        .ok_or(ErrorCode::ArithmeticOverflow)? % root_history_size;
+    tree_account.root_index = new_root_index as u64;
+    tree_account.root_history[new_root_index] = current_level_hash;
+    
+    Ok(proof)
+}
+```
+
+### Algorithm Walkthrough
+
+**Example:** Appending the 5th leaf (index 4) to a height-3 tree
+
+```
+Initial state (4 leaves):
+         root
+        /    \
+      h01    h23
+     /  \   /  \
+   L0  L1 L2  L3
+
+Index 4 in binary: 100
+```
+
+**Level 0:** (rightmost bit = 0)
+```
+index = 4 (even)
+left = L4 (new leaf)
+right = zero_bytes[0] (empty sibling)
+subtrees[0] = L4
+proof[0] = zero_bytes[0]
+hash = H(L4, zero_bytes[0])
+```
+
+**Level 1:** (middle bit = 0)
+```
+index = 2 (even)
+left = H(L4, zero_bytes[0])
+right = zero_bytes[1] (empty sibling)
+subtrees[1] = H(L4, zero_bytes[0])
+proof[1] = zero_bytes[1]
+hash = H(H(L4, zero_bytes[0]), zero_bytes[1])
+```
+
+**Level 2:** (leftmost bit = 1)
+```
+index = 1 (odd)
+left = subtrees[2] = h01 (existing left subtree)
+right = H(H(L4, zero_bytes[0]), zero_bytes[1])
+proof[2] = h01
+hash = H(h01, H(H(L4, zero_bytes[0]), zero_bytes[1]))
+```
+
+**Result:**
+- New root computed and stored
+- Subtree cache updated for future appends
+- Merkle proof returned for immediate use
+
+### Key Optimizations
+
+**1. Subtree Caching**
+
+The `subtrees` array stores the rightmost filled subtree at each level. This allows O(height) append operations instead of O(n log n) for n leaves.
+
+**2. Index-Based Path Selection**
+
+The algorithm uses the binary representation of the leaf index to determine left/right positioning:
+- Bit 0: Level 0 position
+- Bit 1: Level 1 position
+- Bit i: Level i position
+
+If `current_index % 2 == 0`, the new node goes on the left.
+
+**3. Zero Byte Precomputation**
+
+Empty subtrees use precomputed hashes instead of computing them on the fly.
+
+**4. Proof Generation**
+
+The append function returns the Merkle proof, allowing users to immediately generate zero-knowledge proofs without a separate query.
+
+## Root History
+
+The tree maintains a circular buffer of recent roots to support asynchronous proof generation.
+
+### Why Root History?
+
+In a blockchain environment:
+1. User generates a proof using root R at time T
+2. Other transactions modify the tree between T and submission
+3. By time user submits, the current root is R'
+
+The root history allows the user's proof (using old root R) to still be valid if R is in the history.
+
+### Root Lookup
+
+```rust
+pub fn is_known_root(tree_account: &MerkleTreeAccount, root: [u8; 32]) -> bool {
+    if root == [0u8; 32] {
+        return false;
+    }
+    
+    let root_history_size = tree_account.root_history_size as usize;
+    let current_root_index = tree_account.root_index as usize;
+    let mut i = current_root_index;
+    
+    loop {
+        if root == tree_account.root_history[i] {
+            return true;
+        }
+        
+        if i == 0 {
+            i = root_history_size - 1;
+        } else {
+            i -= 1;
+        }
+        
+        if i == current_root_index {
+            break;
+        }
+    }
+    
+    false
+}
+```
+
+**Algorithm:**
+1. Reject zero roots (invalid)
+2. Start at current root index
+3. Walk backwards through circular buffer
+4. Return true if root found
+5. Return false if we wrap around to start
+
+**Complexity:** O(root_history_size)
+
+### Root History Size
+
+Typical configuration: 100-1000 roots
+
+**Trade-offs:**
+- Larger history: More flexibility for async proofs, more storage
+- Smaller history: Less storage, but proofs must be submitted quickly
+
+For Privacy Cash:
+- Root history size: 100
+- Allows ~10-15 minutes for proof submission (assuming ~10s per transaction)
+
+## Poseidon Hashing
+
+The tree uses Poseidon hash for zk-SNARK compatibility:
+
+```rust
+H::hashv(&[&left, &right])
+```
+
+Where `H: Hasher` is typically Poseidon with 2 inputs.
+
+**Properties:**
+- Field arithmetic: Operates in BN254 scalar field
+- Efficient circuits: ~200 constraints per hash
+- Domain separation: Hashes at different levels use different parameters
+
+## Storage Costs
+
+For a height-26 tree with 100-root history:
+
+```
+Fixed fields: 32 bytes (height, next_index, root_index, root_history_size)
+Root: 32 bytes
+Root history: 100 × 32 = 3,200 bytes
+Subtrees: 26 × 32 = 832 bytes
+
+Total: ~4,100 bytes
+```
+
+**Solana rent:** ~0.028 SOL for 4,100 bytes
+
+## Proof Verification
+
+While proof generation happens off-chain, verification occurs in the circuit:
+
+```circom
+template MerkleProof(levels) {
+    signal input leaf;
+    signal input pathElements[levels];
+    signal input pathIndices;
+    signal output root;
+    
+    // Convert path indices to binary
+    component indexBits = Num2Bits(levels);
+    indexBits.in <== pathIndices;
+    
+    // Hash up the tree
+    for (var i = 0; i < levels; i++) {
+        switcher[i] = Switcher();
+        switcher[i].L <== i == 0 ? leaf : hasher[i - 1].out;
+        switcher[i].R <== pathElements[i];
+        switcher[i].sel <== indexBits.out[i];
+        
+        hasher[i] = Poseidon(2);
+        hasher[i].inputs[0] <== switcher[i].outL;
+        hasher[i].inputs[1] <== switcher[i].outR;
+    }
+    
+    root <== hasher[levels - 1].out;
+}
+```
+
+The circuit recomputes the root from the leaf and path elements, verifying membership.
+
+## Performance Characteristics
+
+**Append operation:**
+- Compute units: ~2,000-3,000 CU
+- Time: O(height) = O(26) hashes
+- Storage writes: 1 root + 26 subtrees + 1 history entry
+
+**Root lookup:**
+- Compute units: ~100-500 CU
+- Time: O(root_history_size)
+- Storage reads: No writes
+
+**Proof generation (off-chain):**
+- Time: O(height) tree traversal
+- Data: 26 × 32 = 832 bytes (path elements)
+
+## Security Considerations
+
+### Collision Resistance
+
+Poseidon provides ~128 bits of collision resistance, sufficient for cryptographic applications.
+
+### Preimage Resistance
+
+Given a root R, it is computationally infeasible to find a leaf L and path that produces R (without knowing a valid leaf).
+
+### Second Preimage Resistance
+
+Given a leaf L with path P producing root R, it is computationally infeasible to find a different L' and P' producing the same R.
+
+### Tree Full Protection
+
+```rust
+require!(
+    tree_account.next_index < max_capacity,
+    ErrorCode::MerkleTreeFull
+);
+```
+
+The tree rejects appends once full, preventing overflow.
+
+### Root History Expiration
+
+Old roots naturally expire from the history. Users must submit proofs before their root is evicted, or regenerate with a newer root.
+
+## Implementation Source
+
+The Merkle tree implementation is adapted from [Light Protocol's sparse merkle tree](https://github.com/Lightprotocol/light-protocol/blob/main/sparse-merkle-tree/src/merkle_tree.rs), which has been audited and battle-tested in production.

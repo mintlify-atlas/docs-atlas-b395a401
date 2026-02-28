@@ -1,0 +1,207 @@
+---
+title: 'update_deposit_limit'
+description: 'Update the maximum deposit amount for SOL or SPL tokens'
+---
+
+## Overview
+
+The `update_deposit_limit` instruction allows the program authority to modify the maximum deposit amount for the SOL merkle tree.
+
+For SPL tokens, use `update_deposit_limit_for_spl_token` instead.
+
+<Note>
+Only the program authority can call this instruction.
+</Note>
+
+## Function Signature
+
+```rust
+pub fn update_deposit_limit(
+    ctx: Context<UpdateDepositLimit>,
+    new_limit: u64
+) -> Result<()>
+```
+
+## Parameters
+
+<ParamField path="new_limit" type="u64" required>
+  New maximum deposit amount in lamports. Examples:
+  - 1 SOL: `1_000_000_000`
+  - 100 SOL: `100_000_000_000`
+  - 1,000 SOL: `1_000_000_000_000` (default)
+  - 10,000 SOL: `10_000_000_000_000`
+</ParamField>
+
+## Accounts
+
+<ParamField path="tree_account" type="AccountLoader<MerkleTreeAccount>" required>
+  The merkle tree account to update. PDA: `["merkle_tree"]`.
+  - **Mutable**: Yes
+  - **Authority check**: Must be owned by the signer
+</ParamField>
+
+<ParamField path="authority" type="Signer" required>
+  The program authority. Must match the tree's authority field.
+  - **Signer**: Yes
+</ParamField>
+
+## Code Example
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
+
+const program = anchor.workspace.Zkcash as Program<Zkcash>;
+const authority = anchor.web3.Keypair.generate();
+
+// Derive tree PDA
+const [treeAccountPDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("merkle_tree")],
+  program.programId
+);
+
+// Update to 5,000 SOL maximum
+const newLimit = new anchor.BN(5000).mul(new anchor.BN(LAMPORTS_PER_SOL));
+
+await program.methods
+  .updateDepositLimit(newLimit)
+  .accounts({
+    treeAccount: treeAccountPDA,
+    authority: authority.publicKey
+  })
+  .signers([authority])
+  .rpc();
+
+console.log(`Deposit limit updated to ${newLimit.toString()} lamports`);
+```
+
+## Update SPL Token Deposit Limit
+
+For SPL tokens, use the separate instruction with the mint-specific PDA:
+
+```typescript
+// For SPL tokens
+const mint = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"); // USDC
+
+const [splTreePDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("merkle_tree"), mint.toBuffer()],
+  program.programId
+);
+
+// Update to 10 million USDC (with 6 decimals)
+const newUsdcLimit = new anchor.BN(10_000_000_000_000);
+
+await program.methods
+  .updateDepositLimitForSplToken(newUsdcLimit)
+  .accounts({
+    treeAccount: splTreePDA,
+    mint: mint,
+    authority: authority.publicKey
+  })
+  .signers([authority])
+  .rpc();
+```
+
+## Common Use Cases
+
+<AccordionGroup>
+  <Accordion title="Increase Limit for High Volume">
+    When transaction volume increases, raise the limit to accommodate larger deposits:
+    ```typescript
+    // Increase from 1,000 SOL to 10,000 SOL
+    const newLimit = new anchor.BN(10_000_000_000_000);
+    await updateDepositLimit(newLimit);
+    ```
+  </Accordion>
+  
+  <Accordion title="Decrease Limit for Security">
+    During security incidents or maintenance, lower the limit to reduce risk:
+    ```typescript
+    // Decrease from 1,000 SOL to 100 SOL
+    const newLimit = new anchor.BN(100_000_000_000);
+    await updateDepositLimit(newLimit);
+    ```
+  </Accordion>
+  
+  <Accordion title="Disable Deposits Temporarily">
+    Set limit to 0 to prevent all new deposits:
+    ```typescript
+    // Temporarily disable deposits
+    const newLimit = new anchor.BN(0);
+    await updateDepositLimit(newLimit);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## State Changes
+
+### MerkleTreeAccount
+- `max_deposit_amount`: Updated to `new_limit`
+
+All other fields remain unchanged.
+
+## Behavior
+
+1. Loads the tree account and verifies authority
+2. Updates the `max_deposit_amount` field
+3. Emits a program log message
+4. The new limit applies immediately to all subsequent deposits
+
+<Warning>
+Existing deposits are not affected. Only new deposits will be subject to the new limit.
+</Warning>
+
+## Authorization
+
+The signer must be the tree's authority. This is verified through Anchor's `has_one` constraint:
+
+```rust
+#[account(
+    mut,
+    seeds = [b"merkle_tree"],
+    bump = tree_account.load()?.bump,
+    has_one = authority @ ErrorCode::Unauthorized
+)]
+pub tree_account: AccountLoader<'info, MerkleTreeAccount>,
+```
+
+## Errors
+
+<ResponseField name="Unauthorized" type="Error">
+  Thrown when the signer is not the tree's authority.
+</ResponseField>
+
+## Program Log Output
+
+When successful, the instruction logs:
+
+```
+Deposit limit updated to: {new_limit} lamports
+```
+
+For SPL tokens:
+
+```
+Deposit limit updated to: {new_limit} for mint: {mint_address}
+```
+
+## Monitoring Limit Changes
+
+You can monitor limit changes by:
+
+1. Parsing transaction logs for "Deposit limit updated" messages
+2. Periodically fetching the tree account and checking `max_deposit_amount`
+3. Setting up event listeners for authority transactions
+
+```typescript
+// Check current limit
+const treeAccount = await program.account.merkleTreeAccount.fetch(treeAccountPDA);
+console.log(`Current deposit limit: ${treeAccount.maxDepositAmount.toString()} lamports`);
+```
+
+## See Also
+
+- [initialize](/reference/instructions/initialize) - Initialize program with default limits
+- [initialize_spl_tree](/reference/instructions/initialize-spl-tree) - Set initial SPL token limit
+- [update_global_config](/reference/instructions/update-global-config) - Update fee rates

@@ -1,0 +1,572 @@
+---
+title: 'Zero-Knowledge Proofs'
+description: 'Learn how Privacy Cash uses Groth16 ZK-SNARKs to enable private transactions'
+icon: 'key'
+---
+
+## What are Zero-Knowledge Proofs?
+
+A **zero-knowledge proof** (ZKP) is a cryptographic method that allows one party (the prover) to prove to another party (the verifier) that a statement is true, without revealing any information beyond the validity of the statement itself.
+
+<Info>
+**Example: Cave Analogy**
+
+Imagine a circular cave with one entrance and a magic door in the middle. Alice wants to prove to Bob that she knows the password to the door without revealing the password.
+
+1. Alice enters the cave and goes to either the left or right path (Bob can't see which)
+2. Bob then shouts either "left" or "right"
+3. Alice emerges from the requested side by using the password to open the door if needed
+4. After many repetitions, Bob is convinced Alice knows the password without ever learning it
+
+Privacy Cash works similarly: you prove you own a commitment without revealing which one.
+</Info>
+
+## Why Zero-Knowledge Proofs?
+
+Privacy Cash uses ZK proofs to enable private transactions while maintaining security guarantees:
+
+<CardGroup cols={2}>
+  <Card title="Privacy" icon="eye-slash">
+    Prove ownership of a commitment without revealing which commitment, maintaining transaction unlinkability.
+  </Card>
+  
+  <Card title="Security" icon="shield-check">
+    Ensure all transaction rules are followed (amount conservation, valid signatures, no double-spending) without trust.
+  </Card>
+  
+  <Card title="Efficiency" icon="gauge-high">
+    Groth16 proofs are small (~256 bytes) and fast to verify (~1ms on Solana), enabling scalable privacy.
+  </Card>
+  
+  <Card title="No Trusted Party" icon="users-slash">
+    After trusted setup, no ongoing trust is required. The cryptography is trustless and verifiable.
+  </Card>
+</CardGroup>
+
+## Groth16 ZK-SNARKs
+
+Privacy Cash uses **Groth16**, a popular ZK-SNARK (Zero-Knowledge Succinct Non-Interactive Argument of Knowledge) construction.
+
+### Properties
+
+<Tabs>
+  <Tab title="Zero-Knowledge">
+    The proof reveals nothing about the witness (private inputs) beyond the statement being true.
+    
+    **What's hidden:**
+    - Private keys
+    - Blinding factors
+    - Input commitment amounts
+    - Merkle path (which leaf in tree)
+    
+    **What's revealed:**
+    - Proof is valid for some commitment in the tree
+    - Public inputs (nullifiers, output commitments, amounts)
+    - Merkle root (tree state)
+  </Tab>
+  
+  <Tab title="Succinct">
+    Proofs are small and fast to verify, regardless of computation complexity.
+    
+    **Size:**
+    - Proof: 256 bytes (proof_a: 64, proof_b: 128, proof_c: 64)
+    - Public inputs: 224 bytes (7 × 32 bytes)
+    - Total: ~480 bytes per transaction
+    
+    **Verification time:**
+    - On-chain: ~20,000 compute units (~0.4ms)
+    - Off-chain: < 1ms on modern hardware
+  </Tab>
+  
+  <Tab title="Non-Interactive">
+    Proofs can be generated and verified without back-and-forth communication.
+    
+    This is crucial for blockchain applications:
+    - Prover generates proof offline
+    - Submits proof + public inputs to blockchain
+    - Smart contract verifies proof deterministically
+    - No interaction between prover and verifier needed
+  </Tab>
+  
+  <Tab title="Argument of Knowledge">
+    The prover must actually know the witness, not just guess the proof.
+    
+    **Security:**
+    - Soundness: Probability of forging a proof ≈ 2^-128 (negligible)
+    - Knowledge extraction: If proof is valid, prover must know witness
+    - No brute force: Cannot guess proofs even with unlimited computation
+  </Tab>
+</Tabs>
+
+## Circuit Architecture
+
+The Privacy Cash circuit is implemented in Circom and compiles to a rank-1 constraint system (R1CS).
+
+### Transaction Circuit
+
+Located at `circuits/transaction.circom:22`, the main circuit has:
+
+**Inputs:**
+```circom
+template Transaction(levels, nIns, nOuts) {
+    // Public inputs (visible on-chain)
+    signal input root;              // Merkle root
+    signal input publicAmount;      // External amount - fee
+    signal input extDataHash;       // Hash of recipient, fee, etc.
+    signal input inputNullifier[2]; // Nullifiers to prevent double-spend
+    signal input outputCommitment[2]; // New commitments
+    
+    // Private inputs (witness, not revealed)
+    signal input inAmount[2];        // Input amounts
+    signal input inPrivateKey[2];    // Private keys
+    signal input inBlinding[2];      // Blinding factors
+    signal input inPathIndices[2];   // Merkle path positions
+    signal input inPathElements[2][levels]; // Merkle proofs
+    signal input outAmount[2];       // Output amounts
+    signal input outPubkey[2];       // Output public keys
+    signal input outBlinding[2];     // Output blinding factors
+    signal input mintAddress;        // Token type
+}
+```
+
+**Constraints:**
+1. **Keypair validation**: Public key = hash(private key)
+2. **Commitment computation**: commitment = hash(amount, pubkey, blinding, mint)
+3. **Signature generation**: signature = hash(privkey, commitment, merkle_path)
+4. **Nullifier computation**: nullifier = hash(commitment, path_indices, signature)
+5. **Merkle proof verification**: Prove commitment is in tree with given root
+6. **Amount conservation**: sum(inputs) + publicAmount = sum(outputs)
+7. **No duplicate nullifiers**: inputNullifier[0] ≠ inputNullifier[1]
+
+<Note>
+The circuit uses **Poseidon hash** throughout, which is ZK-friendly (requires fewer constraints than SHA-256).
+</Note>
+
+### Circuit Parameters
+
+```typescript
+// From transaction.circom
+const MERKLE_TREE_HEIGHT = 26;  // Supports 2^26 = 67M commitments
+const NUM_INPUTS = 2;            // Up to 2 input commitments
+const NUM_OUTPUTS = 2;           // Exactly 2 output commitments
+
+// Circuit: Transaction(26, 2, 2)
+```
+
+### Constraint Count
+
+The circuit compiles to approximately:
+- **Total constraints**: ~2,000
+- **Merkle proof**: ~1,500 constraints (26 levels × ~60 per level)
+- **Poseidon hashes**: ~400 constraints
+- **Other logic**: ~100 constraints
+
+<Info>
+Smaller constraint counts mean faster proving and verification. Privacy Cash's circuit is optimized for efficiency.
+</Info>
+
+## Proof Generation
+
+Users generate proofs off-chain using the Privacy Cash SDK or CLI.
+
+### Generation Process
+
+<Steps>
+  <Step title="Collect Inputs">
+    Gather all public and private inputs for the circuit:
+    
+    ```typescript
+    const inputs = {
+      // Public inputs
+      root: merkleTree.root,
+      publicAmount: extAmount - fee,
+      extDataHash: hash(recipient, extAmount, fee, ...),
+      inputNullifier: [nullifier1, nullifier2],
+      outputCommitment: [commitment1, commitment2],
+      mintAddress: NATIVE_MINT,
+      
+      // Private inputs
+      inAmount: [amount1, amount2],
+      inPrivateKey: [privKey1, privKey2],
+      inBlinding: [blinding1, blinding2],
+      inPathIndices: [pathIdx1, pathIdx2],
+      inPathElements: [path1, path2],
+      outAmount: [outAmt1, outAmt2],
+      outPubkey: [outPub1, outPub2],
+      outBlinding: [outBlind1, outBlind2],
+    };
+    ```
+  </Step>
+  
+  <Step title="Generate Witness">
+    Execute the circuit to compute all intermediate signals:
+    
+    ```bash
+    # Compute witness from inputs
+    node generate_witness.js transaction.wasm input.json witness.wtns
+    ```
+    
+    This ensures all constraints are satisfied before proving.
+  </Step>
+  
+  <Step title="Create Proof">
+    Use the proving key to generate a Groth16 proof:
+    
+    ```bash
+    # Generate proof using snarkjs
+    snarkjs groth16 prove transaction.zkey witness.wtns proof.json public.json
+    ```
+    
+    **Output:**
+    - `proof.json`: The proof (π_a, π_b, π_c)
+    - `public.json`: Public inputs
+    
+    **Time:** ~2-5 seconds on modern laptops
+  </Step>
+  
+  <Step title="Submit Transaction">
+    Package the proof and submit to Solana:
+    
+    ```typescript
+    await program.methods
+      .transact(proof, extDataMinified, encryptedOutput1, encryptedOutput2)
+      .accounts({ /* ... */ })
+      .rpc();
+    ```
+    
+    The on-chain program verifies the proof before executing the transfer.
+  </Step>
+</Steps>
+
+### SDK Integration
+
+The Privacy Cash SDK handles proof generation automatically:
+
+```typescript Example: Generate Withdraw Proof
+import { PrivacyCash } from '@privacy-cash/sdk';
+
+const privacyCash = new PrivacyCash(connection);
+
+// SDK generates proof under the hood
+const tx = await privacyCash.withdraw({
+  amount: 1.0,              // 1 SOL
+  recipient: recipientKey,
+  inputCommitments: [utxo1, utxo2],  // Your commitments
+  outputCommitments: [change],       // Change output
+  fee: 0.0025,              // 0.25% withdrawal fee
+});
+
+await tx.send();
+```
+
+## Proof Verification
+
+The Solana program verifies proofs on-chain using a hardcoded verifying key.
+
+### Verification Process
+
+<Steps>
+  <Step title="Deserialize Proof">
+    Extract proof elements and public inputs:
+    
+    ```rust
+    // From utils.rs:214
+    pub fn verify_proof(proof: Proof, verifying_key: Groth16Verifyingkey) -> bool {
+        let mut public_inputs_vec: [[u8; 32]; 7] = [[0u8; 32]; 7];
+        
+        public_inputs_vec[0] = proof.root;
+        public_inputs_vec[1] = proof.public_amount;
+        public_inputs_vec[2] = proof.ext_data_hash;
+        public_inputs_vec[3] = proof.input_nullifiers[0];
+        public_inputs_vec[4] = proof.input_nullifiers[1];
+        public_inputs_vec[5] = proof.output_commitments[0];
+        public_inputs_vec[6] = proof.output_commitments[1];
+        // ...
+    }
+    ```
+  </Step>
+  
+  <Step title="Initialize Verifier">
+    Create a Groth16 verifier with the verifying key:
+    
+    ```rust
+    let mut verifier = match Groth16Verifier::new(
+        &proof_a_neg,  // Negated π_a (for pairing check)
+        &proof.proof_b,
+        &proof.proof_c,
+        &public_inputs_vec,
+        &VERIFYING_KEY  // Hardcoded in program
+    ) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    ```
+  </Step>
+  
+  <Step title="Pairing Check">
+    Verify the proof using bilinear pairings:
+    
+    **Groth16 verification equation:**
+    ```
+    e(π_a, π_b) = e(α, β) · e(IC, γ) · e(π_c, δ)
+    ```
+    
+    Where:
+    - `e()` is a pairing operation on elliptic curves (BN254)
+    - `α, β, γ, δ` are from the verifying key
+    - `IC` is computed from public inputs and verifying key
+    
+    ```rust
+    verifier.verify().unwrap_or(false)
+    ```
+  </Step>
+  
+  <Step title="Check Result">
+    Verification returns true/false:
+    
+    ```rust
+    // From lib.rs:260
+    require!(verify_proof(proof.clone(), VERIFYING_KEY), ErrorCode::InvalidProof);
+    ```
+    
+    If verification fails, the transaction is rejected before any state changes.
+  </Step>
+</Steps>
+
+### Verifying Key
+
+The verifying key is hardcoded in the program at `utils.rs:16`:
+
+```rust
+pub const VERIFYING_KEY: Groth16Verifyingkey = Groth16Verifyingkey {
+    nr_pubinputs: 7,  // 7 public inputs
+    vk_alpha_g1: [...],
+    vk_beta_g2: [...],
+    vk_gamme_g2: [...],
+    vk_delta_g2: [...],
+    vk_ic: &[...],  // IC has 8 elements (7 inputs + 1)
+};
+```
+
+<Warning>
+**The verifying key must match the circuit and proving key.** Any mismatch will cause all proofs to fail verification.
+</Warning>
+
+## Trusted Setup
+
+Groth16 requires a **trusted setup ceremony** to generate proving and verifying keys.
+
+### What is Trusted Setup?
+
+<Accordion title="Ceremony Details">
+A trusted setup is a multi-party computation (MPC) where participants generate random values called "toxic waste."
+
+**Process:**
+1. Multiple participants contribute randomness
+2. Each contribution is combined cryptographically
+3. Proving key and verifying key are generated
+4. Participants destroy their random values (toxic waste)
+
+**Security:**
+- As long as **one participant is honest** and destroys their toxic waste, the setup is secure
+- Multiple participants increase confidence (no single point of failure)
+- Toxic waste could be used to forge proofs, so destruction is critical
+
+**Privacy Cash setup:**
+- Conducted by the Privacy Cash team
+- Multiple contributors from different organizations
+- Setup artifacts are published for transparency
+</Accordion>
+
+### Powers of Tau
+
+Privacy Cash uses a universal trusted setup (Powers of Tau) plus a circuit-specific phase:
+
+<Steps>
+  <Step title="Phase 1: Powers of Tau">
+    Universal ceremony for all circuits of a certain size:
+    
+    ```bash
+    # Download Powers of Tau (universal, already done)
+    wget https://hermez.s3-eu-west-1.amazonaws.com/powersOfTau28_hez_final_16.ptau
+    ```
+    
+    This phase is **circuit-independent** and can be reused.
+  </Step>
+  
+  <Step title="Phase 2: Circuit-Specific">
+    Generate proving and verifying keys for the specific circuit:
+    
+    ```bash
+    # Compile circuit
+    circom transaction.circom --r1cs --wasm --sym
+    
+    # Generate zkey (phase 2)
+    snarkjs groth16 setup transaction.r1cs powersOfTau28_hez_final_16.ptau transaction_0000.zkey
+    
+    # Contribute randomness (can be done by multiple parties)
+    snarkjs zkey contribute transaction_0000.zkey transaction_0001.zkey
+    
+    # Export verifying key
+    snarkjs zkey export verificationkey transaction_0001.zkey vkey.json
+    ```
+  </Step>
+  
+  <Step title="Deploy Verifying Key">
+    Hardcode the verifying key in the Solana program:
+    
+    ```rust
+    // Extracted from vkey.json and formatted for Rust
+    pub const VERIFYING_KEY: Groth16Verifyingkey = /* ... */;
+    ```
+    
+    The key is now immutably stored on-chain.
+  </Step>
+</Steps>
+
+<Info>
+**Upcoming: PLONK Migration**
+
+Future versions may migrate to PLONK or other proof systems that don't require trusted setup, providing trustless cryptography end-to-end.
+</Info>
+
+## Performance Characteristics
+
+### Proving Time
+
+| Hardware | Time |
+|----------|------|
+| MacBook Pro M1 | ~2-3 seconds |
+| High-end Desktop | ~1-2 seconds |
+| Mobile (iOS/Android) | ~10-15 seconds |
+| Server (32 cores) | ~500ms |
+
+<Tip>
+Proof generation happens client-side. For mobile applications, consider server-side proving with user consent.
+</Tip>
+
+### Verification Time
+
+| Platform | Time | Compute Units (Solana) |
+|----------|------|------------------------|
+| Solana On-Chain | ~0.4ms | ~20,000 CU |
+| Off-Chain (Node.js) | ~1ms | N/A |
+| Off-Chain (Browser) | ~2-5ms | N/A |
+
+### Resource Usage
+
+**Proving:**
+- Memory: ~500 MB (witness generation)
+- CPU: 1 core at 100% for 2-3 seconds
+- Disk: ~50 MB (proving key)
+
+**Verification:**
+- Memory: ~10 MB
+- CPU: Minimal (< 1ms)
+- Disk: ~1 KB (verifying key)
+
+## Security Analysis
+
+<AccordionGroup>
+  <Accordion title="Soundness">
+    **Property:** A valid proof can only be generated if the statement is true.
+    
+    **Groth16 soundness:**
+    - Based on hardness of discrete log on BN254 elliptic curve
+    - Security level: ~128 bits
+    - Probability of forging proof: < 2^-128 (negligible)
+    
+    **Audits:**
+    - Circuit reviewed by Accretion, HashCloak, Zigtur, Kriko
+    - No soundness vulnerabilities found
+  </Accordion>
+  
+  <Accordion title="Zero-Knowledge">
+    **Property:** The proof reveals nothing about private inputs.
+    
+    **Groth16 zero-knowledge:**
+    - Proof is computationally indistinguishable from random
+    - Simulator can generate fake proofs without witness (for analysis only)
+    - No information leakage even with multiple proofs from same witness
+    
+    **Best practices:**
+    - Never reuse blinding factors
+    - Use cryptographically secure randomness
+    - Don't expose intermediate computation values
+  </Accordion>
+  
+  <Accordion title="Completeness">
+    **Property:** If the statement is true and prover is honest, verification always succeeds.
+    
+    **Guarantees:**
+    - Properly formed proofs always verify
+    - No false rejections
+    - Deterministic verification
+    
+    **Testing:**
+    - Extensive unit tests in `anchor/tests/`
+    - Mainnet track record: 100% verification rate for honest proofs
+  </Accordion>
+  
+  <Accordion title="Trusted Setup Security">
+    **Risk:** If all setup participants collude and keep toxic waste, they could forge proofs.
+    
+    **Mitigation:**
+    - Multiple independent contributors
+    - Public ceremony with transparency
+    - Published transcripts
+    - Future migration to transparent setup (PLONK, STARKs)
+    
+    **Current status:**
+    - No evidence of setup compromise
+    - All contributors reported destroying toxic waste
+  </Accordion>
+</AccordionGroup>
+
+## Implementation Reference
+
+<CardGroup cols={2}>
+  <Card title="Transaction Circuit" icon="microchip" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/circuits/transaction.circom">
+    Main circuit implementing JoinSplit logic
+    
+    **circuits/transaction.circom**
+  </Card>
+  
+  <Card title="Merkle Proof Circuit" icon="sitemap" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/circuits/merkleProof.circom">
+    Merkle tree membership proof
+    
+    **circuits/merkleProof.circom**
+  </Card>
+  
+  <Card title="Keypair Circuit" icon="key" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/circuits/keypair.circom">
+    Keypair and signature generation
+    
+    **circuits/keypair.circom**
+  </Card>
+  
+  <Card title="Proof Verification" icon="shield-check" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/anchor/programs/zkcash/src/utils.rs#L214">
+    On-chain Groth16 verification
+    
+    **utils.rs:214**
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Merkle Trees" icon="sitemap" href="/concepts/merkle-trees">
+    Learn how commitments are organized in Merkle trees
+  </Card>
+  
+  <Card title="Commitments & Nullifiers" icon="fingerprint" href="/concepts/commitments-and-nullifiers">
+    Understand the core cryptographic primitives
+  </Card>
+  
+  <Card title="Build with SDK" icon="code" href="/quickstart">
+    Start integrating Privacy Cash into your application
+  </Card>
+  
+  <Card title="Circuit Audit Reports" icon="file-contract" href="/security/audits">
+    Review security audit findings
+  </Card>
+</CardGroup>

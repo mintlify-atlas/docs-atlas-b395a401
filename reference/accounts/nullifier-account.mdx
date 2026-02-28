@@ -1,0 +1,53 @@
+---
+title: NullifierAccount
+description: Account that marks a commitment as spent to prevent double-spending
+---
+
+## Overview
+
+The `NullifierAccount` is a small account whose existence indicates that a specific nullifier (and therefore a specific commitment) has been spent. This is a critical security mechanism that prevents double-spending in the Privacy Cash protocol.
+
+## Account Structure
+
+<ResponseField name="bump" type="u8" required>
+  The PDA bump seed used for account derivation
+</ResponseField>
+
+## How It Works
+
+Each transaction consumes two inputs and creates two outputs:
+
+1. When a user spends a commitment, they provide a nullifier derived from that commitment
+2. The program attempts to create a `NullifierAccount` using that nullifier
+3. If the account already exists, the transaction fails automatically (preventing double-spend)
+4. If the account doesn't exist, it's created and the transaction proceeds
+
+## PDA Seeds
+
+Each transaction uses two nullifiers, creating two nullifier accounts:
+
+### First Input Nullifier
+```
+[b"nullifier0", proof.input_nullifiers[0].as_ref()]
+```
+
+### Second Input Nullifier
+```
+[b"nullifier1", proof.input_nullifiers[1].as_ref()]
+```
+
+## Security Model
+
+The nullifier system provides double-spend protection through account initialization:
+
+- The `init` constraint (without `init_if_needed`) ensures the account must not exist
+- If someone tries to spend the same commitment twice, the second transaction will fail during account validation
+- No additional checks are needed - the Solana runtime enforces account uniqueness
+- Cross-contamination is prevented by having four nullifier accounts checked per transaction to ensure nullifiers aren't reused in different positions
+
+## Notes
+
+- This account contains minimal data (just the bump byte) because its existence is what matters
+- Each nullifier can only be used once across the entire protocol
+- Nullifiers are cryptographically derived from commitments using zero-knowledge proofs
+- Users cannot link nullifiers back to their original commitments without knowing the secret keys

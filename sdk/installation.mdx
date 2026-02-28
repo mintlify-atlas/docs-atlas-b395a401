@@ -1,0 +1,248 @@
+---
+title: 'Installation'
+description: 'Install and configure the Privacy Cash SDK'
+icon: 'download'
+---
+
+## Prerequisites
+
+Before installing the SDK, ensure you have the following:
+
+<CardGroup cols={2}>
+  <Card title="Node.js" icon="node-js">
+    Version 16 or later
+  </Card>
+  <Card title="Solana CLI" icon="terminal">
+    Version 2.1.18 or later
+  </Card>
+  <Card title="Anchor" icon="anchor">
+    Version 0.31.1 (for development)
+  </Card>
+  <Card title="TypeScript" icon="code">
+    Recommended for type safety
+  </Card>
+</CardGroup>
+
+## Install the SDK
+
+The Privacy Cash SDK is available on GitHub. Install it using npm or yarn:
+
+<CodeGroup>
+
+```bash npm
+npm install @privacy-cash/sdk
+```
+
+```bash yarn
+yarn add @privacy-cash/sdk
+```
+
+```bash pnpm
+pnpm add @privacy-cash/sdk
+```
+
+</CodeGroup>
+
+<Note>
+  The SDK package is hosted at [github.com/Privacy-Cash/privacy-cash-sdk](https://github.com/Privacy-Cash/privacy-cash-sdk).
+</Note>
+
+## Install Dependencies
+
+The SDK requires several peer dependencies for cryptographic operations:
+
+<CodeGroup>
+
+```bash npm
+npm install @coral-xyz/anchor @solana/web3.js @solana/spl-token \
+  @lightprotocol/hasher.rs snarkjs ffjavascript bn.js borsh \
+  @ethersproject/sha2
+```
+
+```bash yarn
+yarn add @coral-xyz/anchor @solana/web3.js @solana/spl-token \
+  @lightprotocol/hasher.rs snarkjs ffjavascript bn.js borsh \
+  @ethersproject/sha2
+```
+
+</CodeGroup>
+
+### Dependency Overview
+
+| Package | Purpose |
+|---------|--------|
+| `@coral-xyz/anchor` | Solana program interaction framework |
+| `@solana/web3.js` | Solana blockchain interaction |
+| `@solana/spl-token` | SPL token operations |
+| `@lightprotocol/hasher.rs` | Poseidon hash implementation (WASM) |
+| `snarkjs` | Zero-knowledge proof generation |
+| `ffjavascript` | Finite field arithmetic |
+| `bn.js` | Big number operations |
+| `borsh` | Binary serialization |
+| `@ethersproject/sha2` | SHA-256 hashing |
+
+## Download Circuit Files
+
+The SDK requires circuit files for proof generation. These are large files (100MB+) and must be downloaded separately:
+
+<Steps>
+  <Step title="Clone the Repository">
+    ```bash
+    git clone https://github.com/Privacy-Cash/privacy-cash
+    cd privacy-cash
+    ```
+  </Step>
+  
+  <Step title="Build Circuit Artifacts">
+    ```bash
+    cd anchor/circuits
+    # Install circom if not already installed
+    # See: https://docs.circom.io/getting-started/installation/
+    
+    # Compile the circuit
+    circom transaction2.circom --r1cs --wasm --sym
+    
+    # Generate proving and verification keys
+    # This requires a trusted setup ceremony (powers of tau)
+    snarkjs groth16 setup transaction2.r1cs pot_final.ptau transaction2.zkey
+    ```
+  </Step>
+  
+  <Step title="Copy Artifacts to Your Project">
+    ```bash
+    mkdir -p your-project/circuits
+    cp artifacts/circuits/transaction2/transaction2.wasm your-project/circuits/
+    cp artifacts/circuits/transaction2/transaction2.zkey your-project/circuits/
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Circuit files are typically 100-500MB in size. Ensure you have sufficient disk space and bandwidth.
+</Warning>
+
+## Initialize the SDK
+
+Create a configuration file to initialize the SDK:
+
+```typescript config.ts
+import { Connection, PublicKey } from '@solana/web3.js';
+import { AnchorProvider, Program } from '@coral-xyz/anchor';
+import { WasmFactory } from '@lightprotocol/hasher.rs';
+
+// Initialize connection
+const connection = new Connection('https://api.mainnet-beta.solana.com', 'confirmed');
+
+// Initialize Poseidon hasher
+const lightWasm = await WasmFactory.getInstance();
+
+// Program ID
+const PROGRAM_ID = new PublicKey('9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD');
+
+// Circuit paths
+const CIRCUIT_WASM = './circuits/transaction2.wasm';
+const CIRCUIT_ZKEY = './circuits/transaction2.zkey';
+
+export { connection, lightWasm, PROGRAM_ID, CIRCUIT_WASM, CIRCUIT_ZKEY };
+```
+
+## Verify Installation
+
+Test your installation with a simple script:
+
+```typescript test-installation.ts
+import { WasmFactory } from '@lightprotocol/hasher.rs';
+import { Utxo } from '@privacy-cash/sdk';
+import BN from 'bn.js';
+
+async function testInstallation() {
+  // Initialize hasher
+  const lightWasm = await WasmFactory.getInstance();
+  
+  // Create a test UTXO
+  const utxo = new Utxo({
+    lightWasm,
+    amount: new BN(1000000), // 0.001 SOL
+  });
+  
+  // Generate commitment
+  const commitment = await utxo.getCommitment();
+  console.log('UTXO commitment:', commitment);
+  
+  // Generate nullifier
+  const nullifier = await utxo.getNullifier();
+  console.log('UTXO nullifier:', nullifier);
+  
+  console.log('✅ Installation verified successfully!');
+}
+
+testInstallation().catch(console.error);
+```
+
+Run the test:
+
+```bash
+ts-node test-installation.ts
+```
+
+<Check>
+  If you see commitment and nullifier outputs, your installation is complete!
+</Check>
+
+## Environment Configuration
+
+Create a `.env` file for sensitive configuration:
+
+```bash .env
+# Network Configuration
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+CLUSTER=mainnet-beta
+
+# Program ID
+PROGRAM_ID=9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD
+
+# Circuit Files
+CIRCUIT_WASM_PATH=./circuits/transaction2.wasm
+CIRCUIT_ZKEY_PATH=./circuits/transaction2.zkey
+
+# Fee Configuration
+FEE_RECIPIENT=AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM
+```
+
+<Warning>
+  Never commit private keys or seed phrases to version control. Use environment variables or secure key management systems.
+</Warning>
+
+## TypeScript Configuration
+
+Add proper TypeScript configuration for the SDK:
+
+```json tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "lib": ["ES2020"],
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "resolveJsonModule": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules"]
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Basic Usage" icon="code" href="/sdk/basic-usage">
+    Learn core SDK operations
+  </Card>
+  <Card title="Examples" icon="book" href="/sdk/examples">
+    View complete integration examples
+  </Card>
+</CardGroup>

@@ -1,0 +1,99 @@
+---
+title: Deployment Overview
+description: Overview of Privacy Cash deployment process and environments
+---
+
+Privacy Cash can be deployed to different Solana networks depending on your needs. This section covers the complete deployment workflow from building to verification.
+
+## Prerequisites
+
+Before deploying Privacy Cash, ensure you have the following installed:
+
+- **Solana CLI** 2.1.18 or later
+- **Rust** 1.79.0 or compatible version
+- **Anchor** 0.31.1
+- **Node.js** 16 or later
+- **npm** or **yarn**
+- **Circom** v2.2.2 - [Installation guide](https://docs.circom.io/getting-started/installation/#installing-dependencies)
+
+## Deployment Environments
+
+Privacy Cash supports deployment to multiple Solana networks:
+
+### Devnet
+Development and testing environment. Use this for:
+- Testing new features
+- Integration testing
+- Development workflows
+
+**Program ID**: `ATZj4jZ4FFzkvAcvk27DW9GRkgSbFnHo49fKKPQXU7VS`
+
+### Mainnet
+Production environment for live applications.
+
+**Program ID**: `9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD`
+
+<Note>
+The mainnet program is fully audited by Accretion, HashCloak, Zigtur and Kriko, and verified onchain with hash `c6f1e5336f2068dc1c1e1c64e92e3d8495b8df79f78011e2620af60aa43090c5`.
+</Note>
+
+## Deployment Workflow
+
+The typical deployment process follows these steps:
+
+<Steps>
+  <Step title="Build the Program">
+    Compile the Solana program using Anchor with appropriate feature flags for your target environment.
+  </Step>
+  
+  <Step title="Deploy to Network">
+    Deploy the compiled program to devnet or mainnet using Anchor or Solana CLI.
+  </Step>
+  
+  <Step title="Initialize Program State">
+    Run initialization scripts to set up Merkle trees and configuration accounts.
+  </Step>
+  
+  <Step title="Verify Deployment">
+    Verify the program build matches the deployed bytecode for transparency.
+  </Step>
+</Steps>
+
+## Program Configuration
+
+The program configuration is managed in `anchor/Anchor.toml`:
+
+```toml
+[programs.devnet]
+zkcash = "ATZj4jZ4FFzkvAcvk27DW9GRkgSbFnHo49fKKPQXU7VS"
+
+[programs.mainnet]
+zkcash = "9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD"
+```
+
+## Keypair Management
+
+<Warning>
+Keep your deployment keypairs secure. Never commit `deploy-keypair.json` or `zkcash-keypair.json` to version control.
+</Warning>
+
+Deployment requires two keypairs:
+
+- **deploy-keypair.json**: Pays for deployment transactions and initializes the program
+- **zkcash-keypair.json**: The program's keypair that determines its address
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deploy to Devnet" icon="vial" href="/deployment/devnet">
+    Learn how to deploy and test on devnet
+  </Card>
+  
+  <Card title="Deploy to Mainnet" icon="rocket" href="/deployment/mainnet">
+    Production deployment guide
+  </Card>
+  
+  <Card title="Verify Deployment" icon="shield-check" href="/deployment/verification">
+    Verify your deployed program
+  </Card>
+</CardGroup>

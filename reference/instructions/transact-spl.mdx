@@ -1,0 +1,327 @@
+---
+title: 'transact_spl'
+description: 'Deposit or withdraw SPL tokens with zero-knowledge privacy'
+---
+
+## Overview
+
+The `transact_spl` instruction enables private transactions for SPL tokens. It functions identically to the `transact` instruction but operates on SPL token accounts instead of native SOL.
+
+Each SPL token has its own dedicated merkle tree, initialized via `initialize_tree_account_for_spl_token`.
+
+## Function Signature
+
+```rust
+pub fn transact_spl(
+    ctx: Context<TransactSpl>,
+    proof: Proof,
+    ext_data_minified: ExtDataMinified,
+    encrypted_output1: Vec<u8>,
+    encrypted_output2: Vec<u8>
+) -> Result<()>
+```
+
+## Parameters
+
+<ParamField path="proof" type="Proof" required>
+  Zero-knowledge proof containing:
+  - `proof_a`: First proof component (64 bytes)
+  - `proof_b`: Second proof component (128 bytes)
+  - `proof_c`: Third proof component (64 bytes)
+  - `root`: Merkle tree root (32 bytes)
+  - `public_amount`: Public transaction amount (32 bytes)
+  - `ext_data_hash`: Hash of external data (32 bytes)
+  - `input_nullifiers`: Array of 2 nullifiers (32 bytes each)
+  - `output_commitments`: Array of 2 commitments (32 bytes each)
+</ParamField>
+
+<ParamField path="ext_data_minified" type="ExtDataMinified" required>
+  Minified external data:
+  - `ext_amount`: Token amount to deposit (positive) or withdraw (negative)
+  - `fee`: Transaction fee in token base units
+</ParamField>
+
+<ParamField path="encrypted_output1" type="Vec<u8>" required>
+  Encrypted data for the first output UTXO.
+</ParamField>
+
+<ParamField path="encrypted_output2" type="Vec<u8>" required>
+  Encrypted data for the second output UTXO.
+</ParamField>
+
+## Accounts
+
+<ParamField path="tree_account" type="AccountLoader<MerkleTreeAccount>" required>
+  Token-specific merkle tree. PDA: `["merkle_tree", mint.key()]`.
+  - **Mutable**: Yes
+</ParamField>
+
+<ParamField path="nullifier0" type="Account<NullifierAccount>" required>
+  First nullifier account. PDA: `["nullifier0", proof.input_nullifiers[0]]`.
+  - **Mutable**: Yes
+  - **Initialized**: Yes (created by this instruction)
+</ParamField>
+
+<ParamField path="nullifier1" type="Account<NullifierAccount>" required>
+  Second nullifier account. PDA: `["nullifier1", proof.input_nullifiers[1]]`.
+  - **Mutable**: Yes
+  - **Initialized**: Yes (created by this instruction)
+</ParamField>
+
+<ParamField path="nullifier2" type="SystemAccount" required>
+  Cross-check nullifier. PDA: `["nullifier0", proof.input_nullifiers[1]]`.
+  - **Must not exist**
+</ParamField>
+
+<ParamField path="nullifier3" type="SystemAccount" required>
+  Cross-check nullifier. PDA: `["nullifier1", proof.input_nullifiers[0]]`.
+  - **Must not exist**
+</ParamField>
+
+<ParamField path="global_config" type="Account<GlobalConfig>" required>
+  Global configuration. PDA: `["global_config"]`.
+</ParamField>
+
+<ParamField path="signer" type="Signer" required>
+  Transaction signer.
+  - **Mutable**: Yes
+</ParamField>
+
+<ParamField path="mint" type="Account<Mint>" required>
+  SPL token mint account.
+</ParamField>
+
+<ParamField path="signer_token_account" type="Account<TokenAccount>" required>
+  Signer's token account (source for deposits).
+  - **Mutable**: Yes
+  - **Must be owned by signer**
+  - **Must have correct mint**
+</ParamField>
+
+<ParamField path="recipient" type="UncheckedAccount" required>
+  Recipient wallet account (owner of recipient_token_account).
+</ParamField>
+
+<ParamField path="recipient_token_account" type="Account<TokenAccount>" required>
+  Recipient's token account (destination for withdrawals).
+  - **Mutable**: Yes
+  - **Token mint must match**
+  - **Token authority must be recipient**
+</ParamField>
+
+<ParamField path="tree_ata" type="Account<TokenAccount>" required>
+  Tree's associated token account.
+  - **Mutable**: Yes
+  - **Auto-created if needed** (init_if_needed)
+  - **Authority**: global_config PDA
+</ParamField>
+
+<ParamField path="fee_recipient_ata" type="UncheckedAccount" required>
+  Fee recipient's associated token account.
+  - **Mutable**: Yes
+  - **Must already exist for supported tokens**
+</ParamField>
+
+<ParamField path="token_program" type="Program<Token>" required>
+  SPL Token program.
+</ParamField>
+
+<ParamField path="associated_token_program" type="Program<AssociatedToken>" required>
+  Associated Token program.
+</ParamField>
+
+<ParamField path="system_program" type="Program<System>" required>
+  Solana system program.
+</ParamField>
+
+## Behavior
+
+### Deposits (ext_amount > 0)
+
+1. Validates token account ownership and mint
+2. Checks deposit amount is within limit
+3. Transfers tokens from signer_token_account to tree_ata
+4. Validates and transfers deposit fee to fee_recipient_ata
+5. Verifies zero-knowledge proof
+6. Appends commitments to token-specific merkle tree
+7. Emits SPL commitment events
+
+### Withdrawals (ext_amount < 0)
+
+1. Validates token accounts
+2. Verifies merkle root and proof
+3. Transfers tokens from tree_ata to recipient_token_account
+4. Transfers withdrawal fee to fee_recipient_ata
+5. Appends commitments to merkle tree
+6. Emits SPL commitment events
+
+## Code Example
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
+import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
+
+const depositAmount = 1000000; // 1 token with 6 decimals
+const depositFee = 0;
+
+// Get token accounts
+const signerTokenAccount = await getAssociatedTokenAddress(
+  mintPublicKey,
+  userPublicKey
+);
+
+const recipientTokenAccount = await getAssociatedTokenAddress(
+  mintPublicKey,
+  recipientPublicKey
+);
+
+const treeAta = await getAssociatedTokenAddress(
+  mintPublicKey,
+  globalConfigPDA,
+  true // allowOwnerOffCurve
+);
+
+const feeRecipientAta = await getAssociatedTokenAddress(
+  mintPublicKey,
+  feeRecipientPublicKey
+);
+
+// Get token-specific tree PDA
+const [splTreePDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("merkle_tree"), mintPublicKey.toBuffer()],
+  program.programId
+);
+
+// Generate proof
+const proof = await generateProof(inputs, outputs, extData);
+
+const extDataMinified = {
+  extAmount: new anchor.BN(depositAmount),
+  fee: new anchor.BN(depositFee)
+};
+
+// Execute SPL deposit
+const tx = await program.methods
+  .transactSpl(
+    proof,
+    extDataMinified,
+    encryptedOutput1,
+    encryptedOutput2
+  )
+  .accounts({
+    treeAccount: splTreePDA,
+    nullifier0: nullifier0PDA,
+    nullifier1: nullifier1PDA,
+    nullifier2: nullifier2PDA,
+    nullifier3: nullifier3PDA,
+    globalConfig: globalConfigPDA,
+    signer: userPublicKey,
+    recipient: recipientPublicKey,
+    mint: mintPublicKey,
+    signerTokenAccount: signerTokenAccount,
+    recipientTokenAccount: recipientTokenAccount,
+    treeAta: treeAta,
+    feeRecipientAta: feeRecipientAta,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+    systemProgram: anchor.web3.SystemProgram.programId
+  })
+  .signers([userKeypair])
+  .rpc();
+```
+
+## Allowed Tokens
+
+<Tabs>
+  <Tab title="Mainnet">
+    - USDC: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+    - USDT: `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB`
+    - ORE: `oreoU2P8bN6jkk3jbaiVxYnG1dCXcYxwhwyK9jSybcp`
+    - ZEC: `A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS`
+    - stORE: `sTorERYB6xAZ1SSbwpK3zoK2EEwbBrc7TZAzg1uCGiH`
+    - jlUSDC: `9BEcn9aPEmhSPbPQeFGjidRiEKki46fVQDyPpSQXPA2D`
+    - jlWSOL: `2uQsyo1fXXQkDtcpXnLofWy88PxcvnfH2L8FPSE62FVU`
+  </Tab>
+  <Tab title="Devnet">
+    - USDC: `4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`
+    - USDT: `EcFc2cMyZxaKBkFK1XooxiyDyCPneLXiMwSJiVY6eTad`
+    - ORE: `6zxkY8UygHKBf64LJDXnzcYr9wdvyqScmj7oGPBFw58Z`
+    - ZEC: `Vu3Lcx3chdCHmy9KCCdd19DdJsLejHAZxm1E1bTgE16`
+    - stORE: `5MvqBFU5zeHaEfRuAFW2RhqidHLb7Ejsa6sUwPQQXcj1`
+    - jlUSDC: `Fv7iYNEmq277whRwAFbCqNY3Qz9r73gwDRLrw5yiNmtf`
+    - jlWSOL: `8wBeZG358JQxdsPUVaRJY1viRPkx8Auoh8NvpFscbQka`
+  </Tab>
+  <Tab title="Localnet">
+    All SPL tokens are allowed for testing.
+  </Tab>
+</Tabs>
+
+## Events
+
+This instruction emits two `SplCommitmentData` events:
+
+```rust
+pub struct SplCommitmentData {
+    pub index: u64,
+    pub mint_address: Pubkey,
+    pub commitment: [u8; 32],
+    pub encrypted_output: Vec<u8>,
+}
+```
+
+## Validations
+
+<AccordionGroup>
+  <Accordion title="Token Account Ownership">
+    `signer_token_account.owner` must equal `signer.key()`
+  </Accordion>
+  
+  <Accordion title="Token Account Mint">
+    `signer_token_account.mint` must equal `mint.key()`
+  </Accordion>
+  
+  <Accordion title="Allowed Token">
+    Mint address must be in the allowed tokens list (unless localnet).
+  </Accordion>
+  
+  <Accordion title="All SOL Validations">
+    Same validations as the `transact` instruction apply.
+  </Accordion>
+</AccordionGroup>
+
+## Errors
+
+<ResponseField name="InvalidTokenAccount" type="Error">
+  Token account is not owned by the signer.
+</ResponseField>
+
+<ResponseField name="InvalidTokenAccountMintAddress" type="Error">
+  Token account mint doesn't match the provided mint.
+</ResponseField>
+
+<ResponseField name="InvalidMintAddress" type="Error">
+  Mint address is not in the allowed tokens list.
+</ResponseField>
+
+<ResponseField name="UnknownRoot" type="Error">
+  Merkle root not found in tree history.
+</ResponseField>
+
+<ResponseField name="ExtDataHashMismatch" type="Error">
+  External data hash mismatch.
+</ResponseField>
+
+<ResponseField name="InvalidProof" type="Error">
+  Zero-knowledge proof verification failed.
+</ResponseField>
+
+<ResponseField name="DepositLimitExceeded" type="Error">
+  Deposit amount exceeds the token's maximum deposit limit.
+</ResponseField>
+
+## See Also
+
+- [transact](/reference/instructions/transact) - Transact with SOL
+- [initialize_spl_tree](/reference/instructions/initialize-spl-tree) - Initialize SPL token tree
+- [update_deposit_limit](/reference/instructions/update-deposit-limit) - Update SPL deposit limits

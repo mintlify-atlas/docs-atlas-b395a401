@@ -1,0 +1,486 @@
+---
+title: 'SDK Examples'
+description: 'Complete examples for Privacy Cash integration'
+icon: 'book'
+---
+
+## Deposit SOL (Shield)
+
+Deposit SOL into the privacy pool by creating a commitment and inserting it into the Merkle tree.
+
+### Complete Deposit Example
+
+Based on `~/workspace/source/anchor/tests/sol_tests.ts:677-916`:
+
+```typescript
+import * as anchor from '@coral-xyz/anchor';
+import { Program } from '@coral-xyz/anchor';
+import { Connection, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { WasmFactory } from '@lightprotocol/hasher.rs';
+import { Utxo, MerkleTree, getExtDataHash, prove } from '@privacy-cash/sdk';
+import BN from 'bn.js';
+import path from 'path';
+
+const PROGRAM_ID = new PublicKey('9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD');
+const FEE_RECIPIENT = new PublicKey('AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM');
+const DEPOSIT_FEE_RATE = 0; // 0% deposit fee
+
+async function depositSOL() {
+  // Initialize
+  const connection = new Connection('https://api.mainnet-beta.solana.com');
+  const lightWasm = await WasmFactory.getInstance();
+  const merkleTree = new MerkleTree(26, lightWasm);
+  
+  const depositAmount = 20000; // 0.00002 SOL
+  const calculatedDepositFee = Math.floor((depositAmount * DEPOSIT_FEE_RATE) / 10000);
+  
+  // Create external data
+  const extData = {
+    recipient: recipientPublicKey,
+    extAmount: new BN(depositAmount),
+    encryptedOutput1: Buffer.from('encryptedOutput1Data'),
+    encryptedOutput2: Buffer.from('encryptedOutput2Data'),
+    fee: new BN(calculatedDepositFee),
+    feeRecipient: FEE_RECIPIENT,
+    mintAddress: new PublicKey('11111111111111111111111111111112'), // SOL
+  };
+  
+  // Create inputs (empty for deposit)
+  const inputs = [
+    new Utxo({ lightWasm }),
+    new Utxo({ lightWasm })
+  ];
+  
+  // Create outputs
+  const outputAmount = (depositAmount - calculatedDepositFee).toString();
+  const outputs = [
+    new Utxo({ 
+      lightWasm, 
+      amount: outputAmount,
+      index: merkleTree._layers[0].length 
+    }),
+    new Utxo({ lightWasm, amount: '0' })
+  ];
+  
+  // Prepare Merkle paths (zero paths for empty inputs)
+  const inputMerklePathIndices = inputs.map(() => 0);
+  const inputMerklePathElements = inputs.map(() => {
+    return [...new Array(merkleTree.levels).fill(0)];
+  });
+  
+  // Generate commitments and nullifiers
+  const inputNullifiers = await Promise.all(inputs.map(x => x.getNullifier()));
+  const outputCommitments = await Promise.all(outputs.map(x => x.getCommitment()));
+  
+  const root = merkleTree.root();
+  const calculatedExtDataHash = getExtDataHash(extData);
+  const publicAmountNumber = new BN(depositAmount - calculatedDepositFee);
+  
+  // Prepare circuit inputs
+  const circuitInput = {
+    root: root,
+    publicAmount: publicAmountNumber.toString(),
+    extDataHash: calculatedExtDataHash,
+    mintAddress: '11111111111111111111111111111112',
+    
+    inputNullifier: inputNullifiers,
+    inAmount: inputs.map(x => x.amount.toString(10)),
+    inPrivateKey: inputs.map(x => x.keypair.privkey),
+    inBlinding: inputs.map(x => x.blinding.toString(10)),
+    inPathIndices: inputMerklePathIndices,
+    inPathElements: inputMerklePathElements,
+    
+    outputCommitment: outputCommitments,
+    outAmount: outputs.map(x => x.amount.toString(10)),
+    outBlinding: outputs.map(x => x.blinding.toString(10)),
+    outPubkey: outputs.map(x => x.keypair.pubkey),
+  };
+  
+  // Generate proof
+  const keyBasePath = path.resolve('./circuits/transaction2');
+  const { proof, publicSignals } = await prove(circuitInput, keyBasePath);
+  
+  // Parse proof for submission
+  const proofInBytes = parseProofToBytesArray(proof);
+  const inputsInBytes = parseToBytesArray(publicSignals);
+  
+  const proofToSubmit = {
+    proofA: proofInBytes.proofA,
+    proofB: proofInBytes.proofB.flat(),
+    proofC: proofInBytes.proofC,
+    root: inputsInBytes[0],
+    publicAmount: inputsInBytes[1],
+    extDataHash: inputsInBytes[2],
+    inputNullifiers: [inputsInBytes[3], inputsInBytes[4]],
+    outputCommitments: [inputsInBytes[5], inputsInBytes[6]],
+  };
+  
+  // Find PDAs
+  const [nullifier0PDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from('nullifier0'), Buffer.from(proofToSubmit.inputNullifiers[0])],
+    PROGRAM_ID
+  );
+  const [nullifier1PDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from('nullifier1'), Buffer.from(proofToSubmit.inputNullifiers[1])],
+    PROGRAM_ID
+  );
+  
+  // Submit transaction
+  const tx = await program.methods
+    .transact(
+      proofToSubmit,
+      { extAmount: extData.extAmount, fee: extData.fee },
+      extData.encryptedOutput1,
+      extData.encryptedOutput2
+    )
+    .accounts({
+      treeAccount: treeAccountPDA,
+      nullifier0: nullifier0PDA,
+      nullifier1: nullifier1PDA,
+      nullifier2: crossCheckNullifier2PDA,
+      nullifier3: crossCheckNullifier3PDA,
+      recipient: extData.recipient,
+      feeRecipientAccount: FEE_RECIPIENT,
+      treeTokenAccount: treeTokenAccountPDA,
+      globalConfig: globalConfigPDA,
+      signer: signer.publicKey,
+      systemProgram: anchor.web3.SystemProgram.programId
+    })
+    .signers([signer])
+    .rpc();
+  
+  // Update local Merkle tree
+  for (const commitment of outputCommitments) {
+    merkleTree.insert(commitment);
+  }
+  
+  console.log('Deposit successful! Transaction:', tx);
+  return { outputs, outputCommitments };
+}
+```
+
+<Tip>
+  Store the output UTXOs and their encrypted data securely. You'll need them to withdraw funds later.
+</Tip>
+
+## Withdraw SOL (Unshield)
+
+Withdraw SOL from the privacy pool to any recipient address.
+
+### Complete Withdrawal Example
+
+Based on `~/workspace/source/anchor/tests/sol_tests.ts:918-1103`:
+
+```typescript
+import { FIELD_SIZE } from '@privacy-cash/sdk';
+
+const WITHDRAW_FEE_RATE = 35; // 0.35%
+
+function calculateWithdrawalFee(amount: number): number {
+  return Math.floor((amount * WITHDRAW_FEE_RATE) / 10000);
+}
+
+async function withdrawSOL(depositOutputs: Utxo[], merkleTree: MerkleTree) {
+  const lightWasm = await WasmFactory.getInstance();
+  
+  // Use deposit outputs as withdrawal inputs
+  const withdrawInputs = [
+    depositOutputs[0], // UTXO from deposit
+    new Utxo({ lightWasm }) // Empty UTXO
+  ];
+  
+  const withdrawOutputs = [
+    new Utxo({ 
+      lightWasm, 
+      amount: '3000',
+      index: merkleTree._layers[0].length 
+    }),
+    new Utxo({ lightWasm, amount: '0' })
+  ];
+  
+  // Calculate amounts
+  const withdrawInputsSum = withdrawInputs.reduce((sum, x) => sum.add(x.amount), new BN(0));
+  const withdrawOutputsSum = withdrawOutputs.reduce((sum, x) => sum.add(x.amount), new BN(0));
+  const withdrawalAmount = withdrawInputsSum.sub(withdrawOutputsSum);
+  const withdrawFee = new BN(calculateWithdrawalFee(withdrawalAmount.toNumber()));
+  const extAmount = new BN(withdrawFee).add(withdrawOutputsSum).sub(withdrawInputsSum);
+  
+  // For circom, handle negative numbers with field modular arithmetic
+  const withdrawPublicAmount = new BN(extAmount)
+    .sub(new BN(withdrawFee))
+    .add(FIELD_SIZE)
+    .mod(FIELD_SIZE)
+    .toString();
+  
+  const withdrawExtData = {
+    recipient: recipientPublicKey,
+    extAmount: extAmount,
+    encryptedOutput1: Buffer.from('withdrawEncryptedOutput1'),
+    encryptedOutput2: Buffer.from('withdrawEncryptedOutput2'),
+    fee: withdrawFee,
+    feeRecipient: FEE_RECIPIENT,
+    mintAddress: new PublicKey('11111111111111111111111111111112'),
+  };
+  
+  const withdrawExtDataHash = getExtDataHash(withdrawExtData);
+  
+  // Build Merkle paths
+  const withdrawalInputMerklePathIndices = [];
+  const withdrawalInputMerklePathElements = [];
+  
+  for (let i = 0; i < withdrawInputs.length; i++) {
+    const withdrawInput = withdrawInputs[i];
+    if (withdrawInput.amount.gt(new BN(0))) {
+      // Get actual Merkle path for non-empty UTXO
+      const commitment = await depositOutputs[i].getCommitment();
+      withdrawInput.index = merkleTree.indexOf(commitment);
+      
+      if (withdrawInput.index < 0) {
+        throw new Error(`Input commitment not found in tree`);
+      }
+      
+      withdrawalInputMerklePathIndices.push(withdrawInput.index);
+      withdrawalInputMerklePathElements.push(
+        merkleTree.path(withdrawInput.index).pathElements
+      );
+    } else {
+      // Zero path for empty UTXO
+      withdrawalInputMerklePathIndices.push(0);
+      withdrawalInputMerklePathElements.push(
+        new Array(merkleTree.levels).fill(0)
+      );
+    }
+  }
+  
+  const withdrawInputNullifiers = await Promise.all(
+    withdrawInputs.map(x => x.getNullifier())
+  );
+  const withdrawOutputCommitments = await Promise.all(
+    withdrawOutputs.map(x => x.getCommitment())
+  );
+  
+  // Generate proof
+  const withdrawInput = {
+    root: merkleTree.root(),
+    inputNullifier: withdrawInputNullifiers,
+    outputCommitment: withdrawOutputCommitments,
+    publicAmount: withdrawPublicAmount,
+    extDataHash: withdrawExtDataHash,
+    
+    inAmount: withdrawInputs.map(x => x.amount.toString(10)),
+    inPrivateKey: withdrawInputs.map(x => x.keypair.privkey),
+    inBlinding: withdrawInputs.map(x => x.blinding.toString(10)),
+    mintAddress: '11111111111111111111111111111112',
+    inPathIndices: withdrawalInputMerklePathIndices,
+    inPathElements: withdrawalInputMerklePathElements,
+    
+    outAmount: withdrawOutputs.map(x => x.amount.toString(10)),
+    outBlinding: withdrawOutputs.map(x => x.blinding.toString(10)),
+    outPubkey: withdrawOutputs.map(x => x.keypair.pubkey),
+  };
+  
+  const keyBasePath = path.resolve('./circuits/transaction2');
+  const withdrawProofResult = await prove(withdrawInput, keyBasePath);
+  const withdrawProofInBytes = parseProofToBytesArray(withdrawProofResult.proof);
+  const withdrawInputsInBytes = parseToBytesArray(withdrawProofResult.publicSignals);
+  
+  const withdrawProofToSubmit = {
+    proofA: withdrawProofInBytes.proofA,
+    proofB: withdrawProofInBytes.proofB.flat(),
+    proofC: withdrawProofInBytes.proofC,
+    root: withdrawInputsInBytes[0],
+    publicAmount: withdrawInputsInBytes[1],
+    extDataHash: withdrawInputsInBytes[2],
+    inputNullifiers: [withdrawInputsInBytes[3], withdrawInputsInBytes[4]],
+    outputCommitments: [withdrawInputsInBytes[5], withdrawInputsInBytes[6]],
+  };
+  
+  // Find PDAs and submit transaction...
+  // (Same pattern as deposit)
+  
+  console.log('Withdrawal successful!');
+}
+```
+
+## Deposit SPL Tokens
+
+Deposit SPL tokens (like USDC) into the privacy pool.
+
+### SPL Token Deposit Example
+
+Based on `~/workspace/source/anchor/tests/spl_tests.ts:896-1131`:
+
+```typescript
+import { getAssociatedTokenAddress, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { getMintAddressField } from '@privacy-cash/sdk';
+
+const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+
+async function depositSPLToken() {
+  const lightWasm = await WasmFactory.getInstance();
+  const splMerkleTree = new MerkleTree(26, lightWasm);
+  
+  const depositAmount = 20000; // 0.02 USDC (6 decimals)
+  const calculatedDepositFee = 0; // Free deposits
+  
+  // Get token accounts
+  const signerTokenAccount = await getAssociatedTokenAddress(
+    USDC_MINT,
+    signer.publicKey
+  );
+  const recipientTokenAccount = await getAssociatedTokenAddress(
+    USDC_MINT,
+    recipient.publicKey
+  );
+  const feeRecipientTokenAccount = await getAssociatedTokenAddress(
+    USDC_MINT,
+    FEE_RECIPIENT
+  );
+  
+  const extData = {
+    recipient: recipientTokenAccount,
+    extAmount: new BN(depositAmount),
+    encryptedOutput1: Buffer.from('encryptedOutput1Data'),
+    encryptedOutput2: Buffer.from('encryptedOutput2Data'),
+    fee: new BN(calculatedDepositFee),
+    feeRecipient: feeRecipientTokenAccount,
+    mintAddress: USDC_MINT,
+  };
+  
+  // Convert mint to field representation
+  const mintAddressBase58 = USDC_MINT.toBase58();
+  const mintAddressField = getMintAddressField(USDC_MINT);
+  
+  const inputs = [
+    new Utxo({ lightWasm, mintAddress: mintAddressBase58 }),
+    new Utxo({ lightWasm, mintAddress: mintAddressBase58 })
+  ];
+  
+  const outputAmount = (depositAmount - calculatedDepositFee).toString();
+  const outputs = [
+    new Utxo({ 
+      lightWasm, 
+      amount: outputAmount,
+      index: splMerkleTree._layers[0].length,
+      mintAddress: mintAddressBase58 
+    }),
+    new Utxo({ lightWasm, amount: '0', mintAddress: mintAddressBase58 })
+  ];
+  
+  // Generate proof (same pattern as SOL deposit)
+  const circuitInput = {
+    root: splMerkleTree.root(),
+    publicAmount: new BN(depositAmount - calculatedDepositFee).toString(),
+    extDataHash: getExtDataHash(extData),
+    mintAddress: mintAddressField, // Use field representation for SPL tokens
+    // ... rest of inputs
+  };
+  
+  // Submit using transactSpl instruction
+  const [splTreeAccountPDA] = PublicKey.findProgramAddressSync(
+    [Buffer.from('merkle_tree'), USDC_MINT.toBuffer()],
+    PROGRAM_ID
+  );
+  
+  const treeAta = await getAssociatedTokenAddress(
+    USDC_MINT,
+    globalConfigPDA,
+    true // allowOwnerOffCurve
+  );
+  
+  const depositTx = await program.methods
+    .transactSpl(
+      proofToSubmit,
+      { extAmount: extData.extAmount, fee: extData.fee },
+      extData.encryptedOutput1,
+      extData.encryptedOutput2
+    )
+    .accounts({
+      treeAccount: splTreeAccountPDA,
+      nullifier0: nullifier0PDA,
+      nullifier1: nullifier1PDA,
+      nullifier2: nullifier2PDA,
+      nullifier3: nullifier3PDA,
+      globalConfig: globalConfigPDA,
+      signer: signer.publicKey,
+      recipient: recipient.publicKey,
+      mint: USDC_MINT,
+      signerTokenAccount: signerTokenAccount,
+      recipientTokenAccount: recipientTokenAccount,
+      treeAta: treeAta,
+      feeRecipientAta: feeRecipientTokenAccount,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: anchor.web3.SystemProgram.programId
+    })
+    .signers([signer])
+    .rpc();
+  
+  console.log('SPL deposit successful!', depositTx);
+}
+```
+
+<Warning>
+  SPL tokens require separate Merkle trees per mint. You cannot withdraw USDC using a SOL deposit UTXO.
+</Warning>
+
+## Complete Transaction Cycle
+
+Full cycle: deposit, wait, then withdraw to break the link.
+
+```typescript
+import { setTimeout } from 'timers/promises';
+
+async function completePrivacyTransaction() {
+  // Step 1: Deposit
+  console.log('Step 1: Depositing SOL...');
+  const { outputs, outputCommitments } = await depositSOL();
+  
+  // Step 2: Wait for anonymity set to grow
+  console.log('Step 2: Waiting for more deposits (anonymity set)...');
+  await setTimeout(60000); // Wait 1 minute
+  
+  // Step 3: Fetch updated Merkle tree from chain
+  console.log('Step 3: Syncing Merkle tree...');
+  const merkleTree = await fetchMerkleTreeFromChain();
+  
+  // Step 4: Withdraw to different address
+  console.log('Step 4: Withdrawing to recipient...');
+  await withdrawSOL(outputs, merkleTree);
+  
+  console.log('Privacy transaction complete!');
+  console.log('The link between deposit and withdrawal is now broken.');
+}
+```
+
+## Error Handling
+
+```typescript
+async function safeWithdraw(outputs: Utxo[], merkleTree: MerkleTree) {
+  try {
+    await withdrawSOL(outputs, merkleTree);
+  } catch (error) {
+    if (error.toString().includes('UnknownRoot')) {
+      console.error('Merkle root not found. Tree may be out of sync.');
+      // Refresh Merkle tree and retry
+    } else if (error.toString().includes('NullifierExists')) {
+      console.error('UTXO already spent (double-spend detected).');
+    } else if (error.toString().includes('InvalidProof')) {
+      console.error('ZK proof verification failed.');
+    } else {
+      console.error('Transaction failed:', error);
+    }
+  }
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="brackets-curly" href="/api-reference/introduction">
+    Explore detailed API documentation
+  </Card>
+  <Card title="Advanced Usage" icon="wand-magic-sparkles" href="/advanced">
+    Learn advanced integration patterns
+  </Card>
+</CardGroup>

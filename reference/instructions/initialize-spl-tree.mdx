@@ -1,0 +1,186 @@
+---
+title: 'initialize_tree_account_for_spl_token'
+description: 'Initialize a dedicated merkle tree for a specific SPL token'
+---
+
+## Overview
+
+The `initialize_tree_account_for_spl_token` instruction creates a separate merkle tree for a specific SPL token. Each token type gets its own isolated tree to track deposits and withdrawals.
+
+<Note>
+This instruction can only be called by the program authority and only for tokens in the allowed list.
+</Note>
+
+## Function Signature
+
+```rust
+pub fn initialize_tree_account_for_spl_token(
+    ctx: Context<InitializeTreeAccountForSplToken>,
+    max_deposit_amount: u64
+) -> Result<()>
+```
+
+## Parameters
+
+<ParamField path="max_deposit_amount" type="u64" required>
+  Maximum deposit amount allowed for this token in base units. For example, for a token with 6 decimals:
+  - 1,000,000 = 1 token
+  - 50,000,000,000,000 = 50 million tokens
+</ParamField>
+
+## Accounts
+
+<ParamField path="tree_account" type="AccountLoader<MerkleTreeAccount>" required>
+  Token-specific merkle tree account. PDA derived from `["merkle_tree", mint.key()]`.
+  - **Mutable**: Yes
+  - **Initialized**: Yes (created by this instruction)
+</ParamField>
+
+<ParamField path="mint" type="Account<Mint>" required>
+  SPL token mint account. Must be in the allowed tokens list.
+</ParamField>
+
+<ParamField path="global_config" type="Account<GlobalConfig>" required>
+  Global configuration account. PDA: `["global_config"]`.
+</ParamField>
+
+<ParamField path="authority" type="Signer" required>
+  Program authority that can initialize trees. Must match admin pubkey on mainnet.
+  - **Mutable**: Yes (pays for account creation)
+  - **Signer**: Yes
+</ParamField>
+
+<ParamField path="system_program" type="Program<System>" required>
+  Solana system program.
+</ParamField>
+
+## Tree Configuration
+
+The instruction initializes the tree with:
+
+- **Height**: 26 levels (same as SOL tree)
+- **Root History Size**: 100 historical roots
+- **Max Deposit Amount**: Specified by caller
+- **Authority**: Set to the signer
+- **Next Index**: 0 (empty tree)
+- **Root Index**: 0
+
+## Code Example
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
+
+const program = anchor.workspace.Zkcash as Program<Zkcash>;
+const authority = anchor.web3.Keypair.generate();
+
+// Example: Initialize tree for USDC on mainnet
+const usdcMint = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+
+// Derive tree PDA for this mint
+const [splTreePDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("merkle_tree"), usdcMint.toBuffer()],
+  program.programId
+);
+
+const [globalConfigPDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("global_config")],
+  program.programId
+);
+
+// Maximum deposit: 1 million USDC (1,000,000 * 10^6)
+const maxDepositAmount = new anchor.BN(1_000_000_000_000);
+
+await program.methods
+  .initializeTreeAccountForSplToken(maxDepositAmount)
+  .accounts({
+    treeAccount: splTreePDA,
+    mint: usdcMint,
+    globalConfig: globalConfigPDA,
+    authority: authority.publicKey,
+    systemProgram: anchor.web3.SystemProgram.programId
+  })
+  .signers([authority])
+  .rpc();
+
+console.log(`SPL tree initialized for mint: ${usdcMint.toString()}`);
+```
+
+## Example Deposit Limits
+
+<CardGroup cols={2}>
+  <Card title="USDC (6 decimals)" icon="coins">
+    - 1,000 tokens: `1_000_000_000`
+    - 1 million tokens: `1_000_000_000_000`
+    - 50 million tokens: `50_000_000_000_000`
+  </Card>
+  
+  <Card title="Custom Token (9 decimals)" icon="coins">
+    - 1,000 tokens: `1_000_000_000_000`
+    - 1 million tokens: `1_000_000_000_000_000`
+    - 50 million tokens: `50_000_000_000_000_000`
+  </Card>
+</CardGroup>
+
+## State Changes
+
+### MerkleTreeAccount
+- `authority`: Set to the signer's public key
+- `next_index`: Initialized to 0
+- `root_index`: Initialized to 0
+- `max_deposit_amount`: Set to the provided parameter
+- `height`: Set to 26
+- `root_history_size`: Set to 100
+- `bump`: PDA bump seed
+- `root`: Initialized to the empty tree root
+- `subtrees`: Initialized for Poseidon merkle tree
+
+## Authorization
+
+<Tabs>
+  <Tab title="Localnet">
+    No authorization required. Any account can initialize.
+  </Tab>
+  <Tab title="Devnet">
+    Must be called by: `97rSMQUukMDjA7PYErccyx7ZxbHvSDaeXp2ig5BwSrTf`
+  </Tab>
+  <Tab title="Mainnet">
+    Must be called by: `AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM`
+  </Tab>
+</Tabs>
+
+## Token Allowlist
+
+The mint must be in the program's allowed tokens list. See the [transact_spl](/reference/instructions/transact-spl#allowed-tokens) documentation for the complete list of supported tokens.
+
+On localnet, all tokens are automatically allowed for testing purposes.
+
+## Errors
+
+<ResponseField name="Unauthorized" type="Error">
+  Thrown when the signer is not the authorized admin (mainnet/devnet only).
+</ResponseField>
+
+<ResponseField name="InvalidMintAddress" type="Error">
+  Thrown when the mint address is not in the allowed tokens list.
+</ResponseField>
+
+## Usage Pattern
+
+```typescript
+// 1. Initialize the tree (once per token)
+await initializeTreeForToken(usdcMint, maxDeposit);
+
+// 2. Users can now deposit that token
+await transactSpl(depositProof, usdcMint);
+
+// 3. Optionally update the deposit limit later
+await updateDepositLimitForSplToken(usdcMint, newLimit);
+```
+
+## See Also
+
+- [initialize](/reference/instructions/initialize) - Initialize the main SOL tree
+- [transact_spl](/reference/instructions/transact-spl) - Transact with SPL tokens
+- [update_deposit_limit](/reference/instructions/update-deposit-limit) - Update SPL token deposit limits

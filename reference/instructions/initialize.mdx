@@ -1,0 +1,150 @@
+---
+title: 'initialize'
+description: 'Initialize the Privacy Cash program with SOL merkle tree and global configuration'
+---
+
+## Overview
+
+The `initialize` instruction sets up the Privacy Cash program for the first time. It creates the main merkle tree for SOL transactions, initializes the tree token account, and establishes global fee configuration.
+
+<Note>
+This instruction can only be called once per program deployment and requires admin authorization on mainnet.
+</Note>
+
+## Function Signature
+
+```rust
+pub fn initialize(ctx: Context<Initialize>) -> Result<()>
+```
+
+## Accounts
+
+<ParamField path="tree_account" type="AccountLoader<MerkleTreeAccount>" required>
+  The main merkle tree account for SOL transactions. PDA derived from `["merkle_tree"]`.
+  - **Mutable**: Yes
+  - **Initialized**: Yes (created by this instruction)
+</ParamField>
+
+<ParamField path="tree_token_account" type="Account<TreeTokenAccount>" required>
+  Account that holds deposited SOL tokens. PDA derived from `["tree_token"]`.
+  - **Mutable**: Yes
+  - **Initialized**: Yes (created by this instruction)
+</ParamField>
+
+<ParamField path="global_config" type="Account<GlobalConfig>" required>
+  Global configuration account containing fee rates. PDA derived from `["global_config"]`.
+  - **Mutable**: Yes
+  - **Initialized**: Yes (created by this instruction)
+</ParamField>
+
+<ParamField path="authority" type="Signer" required>
+  The authority that can initialize the program. Must match the admin pubkey on mainnet.
+  - **Mutable**: Yes (pays for account creation)
+  - **Signer**: Yes
+</ParamField>
+
+<ParamField path="system_program" type="Program<System>" required>
+  The Solana system program.
+</ParamField>
+
+## Default Configuration
+
+The instruction initializes the following default values:
+
+- **Merkle Tree Height**: 26 levels (67,108,864 maximum commitments)
+- **Root History Size**: 100 historical roots
+- **Max Deposit Amount**: 1,000 SOL (1,000,000,000,000 lamports)
+- **Deposit Fee Rate**: 0% (free deposits)
+- **Withdrawal Fee Rate**: 0.25% (25 basis points)
+- **Fee Error Margin**: 5% (500 basis points)
+
+## Code Example
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { Program } from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
+
+const program = anchor.workspace.Zkcash as Program<Zkcash>;
+const authority = anchor.web3.Keypair.generate();
+
+// Derive PDAs
+const [treeAccountPDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("merkle_tree")],
+  program.programId
+);
+
+const [treeTokenAccountPDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("tree_token")],
+  program.programId
+);
+
+const [globalConfigPDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("global_config")],
+  program.programId
+);
+
+// Initialize the program
+await program.methods
+  .initialize()
+  .accounts({
+    treeAccount: treeAccountPDA,
+    treeTokenAccount: treeTokenAccountPDA,
+    globalConfig: globalConfigPDA,
+    authority: authority.publicKey,
+    systemProgram: anchor.web3.SystemProgram.programId
+  })
+  .signers([authority])
+  .rpc();
+
+console.log("Privacy Cash initialized successfully");
+```
+
+## State Changes
+
+### MerkleTreeAccount
+- `authority`: Set to the signer's public key
+- `next_index`: Initialized to 0
+- `root_index`: Initialized to 0
+- `max_deposit_amount`: Set to 1,000,000,000,000 lamports
+- `height`: Set to 26
+- `root_history_size`: Set to 100
+- `bump`: PDA bump seed
+- `root`: Initialized to the empty tree root
+
+### TreeTokenAccount
+- `authority`: Set to the signer's public key
+- `bump`: PDA bump seed
+
+### GlobalConfig
+- `authority`: Set to the signer's public key
+- `deposit_fee_rate`: Set to 0 (0% - free deposits)
+- `withdrawal_fee_rate`: Set to 25 (0.25%)
+- `fee_error_margin`: Set to 500 (5%)
+- `bump`: PDA bump seed
+
+## Authorization
+
+<Tabs>
+  <Tab title="Localnet">
+    No authorization required. Any account can initialize.
+  </Tab>
+  <Tab title="Devnet">
+    Must be called by: `97rSMQUukMDjA7PYErccyx7ZxbHvSDaeXp2ig5BwSrTf`
+  </Tab>
+  <Tab title="Mainnet">
+    Must be called by: `AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM`
+  </Tab>
+</Tabs>
+
+## Errors
+
+<ResponseField name="Unauthorized" type="Error">
+  Thrown when the signer is not the authorized admin (mainnet/devnet only).
+</ResponseField>
+
+## See Also
+
+- [initialize_spl_tree](/reference/instructions/initialize-spl-tree) - Initialize a tree for SPL tokens
+- [update_global_config](/reference/instructions/update-global-config) - Update fee configuration
+- [update_deposit_limit](/reference/instructions/update-deposit-limit) - Update deposit limits

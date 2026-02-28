@@ -1,0 +1,281 @@
+---
+title: 'transact'
+description: 'Deposit or withdraw SOL with zero-knowledge privacy'
+---
+
+## Overview
+
+The `transact` instruction is the core function for private SOL transactions. It verifies a zero-knowledge proof and executes either a deposit (positive `ext_amount`) or withdrawal (negative `ext_amount`) of SOL.
+
+This instruction prevents double-spending by creating nullifier accounts that mark UTXOs as spent.
+
+## Function Signature
+
+```rust
+pub fn transact(
+    ctx: Context<Transact>,
+    proof: Proof,
+    ext_data_minified: ExtDataMinified,
+    encrypted_output1: Vec<u8>,
+    encrypted_output2: Vec<u8>
+) -> Result<()>
+```
+
+## Parameters
+
+<ParamField path="proof" type="Proof" required>
+  Zero-knowledge proof containing:
+  - `proof_a`: First proof component (64 bytes)
+  - `proof_b`: Second proof component (128 bytes)
+  - `proof_c`: Third proof component (64 bytes)
+  - `root`: Merkle tree root (32 bytes)
+  - `public_amount`: Public transaction amount (32 bytes)
+  - `ext_data_hash`: Hash of external data (32 bytes)
+  - `input_nullifiers`: Array of 2 nullifiers (32 bytes each)
+  - `output_commitments`: Array of 2 commitments (32 bytes each)
+</ParamField>
+
+<ParamField path="ext_data_minified" type="ExtDataMinified" required>
+  Minified external data containing:
+  - `ext_amount`: Amount to deposit (positive) or withdraw (negative) as i64
+  - `fee`: Transaction fee in lamports as u64
+</ParamField>
+
+<ParamField path="encrypted_output1" type="Vec<u8>" required>
+  Encrypted data for the first output UTXO. This allows the recipient to decrypt and spend it later.
+</ParamField>
+
+<ParamField path="encrypted_output2" type="Vec<u8>" required>
+  Encrypted data for the second output UTXO (often used for change).
+</ParamField>
+
+## Accounts
+
+<ParamField path="tree_account" type="AccountLoader<MerkleTreeAccount>" required>
+  The merkle tree account. PDA: `["merkle_tree"]`.
+  - **Mutable**: Yes
+</ParamField>
+
+<ParamField path="nullifier0" type="Account<NullifierAccount>" required>
+  First nullifier account. PDA: `["nullifier0", proof.input_nullifiers[0]]`.
+  - **Mutable**: Yes
+  - **Initialized**: Yes (created by this instruction)
+  - **Prevents**: Double-spending of first input UTXO
+</ParamField>
+
+<ParamField path="nullifier1" type="Account<NullifierAccount>" required>
+  Second nullifier account. PDA: `["nullifier1", proof.input_nullifiers[1]]`.
+  - **Mutable**: Yes
+  - **Initialized**: Yes (created by this instruction)
+  - **Prevents**: Double-spending of second input UTXO
+</ParamField>
+
+<ParamField path="nullifier2" type="SystemAccount" required>
+  Cross-check nullifier. PDA: `["nullifier0", proof.input_nullifiers[1]]`.
+  - **Must not exist**: Prevents nullifier position swapping attacks
+</ParamField>
+
+<ParamField path="nullifier3" type="SystemAccount" required>
+  Cross-check nullifier. PDA: `["nullifier1", proof.input_nullifiers[0]]`.
+  - **Must not exist**: Prevents nullifier position swapping attacks
+</ParamField>
+
+<ParamField path="tree_token_account" type="Account<TreeTokenAccount>" required>
+  Account holding deposited SOL. PDA: `["tree_token"]`.
+  - **Mutable**: Yes
+</ParamField>
+
+<ParamField path="global_config" type="Account<GlobalConfig>" required>
+  Global configuration. PDA: `["global_config"]`.
+</ParamField>
+
+<ParamField path="recipient" type="UncheckedAccount" required>
+  Recipient account for withdrawals.
+  - **Mutable**: Yes
+  - **Can be any account type**: PDA, wallet, etc.
+</ParamField>
+
+<ParamField path="fee_recipient_account" type="UncheckedAccount" required>
+  Fee recipient account.
+  - **Mutable**: Yes
+</ParamField>
+
+<ParamField path="signer" type="Signer" required>
+  Transaction signer (pays for nullifier account creation and deposits).
+  - **Mutable**: Yes
+</ParamField>
+
+<ParamField path="system_program" type="Program<System>" required>
+  Solana system program.
+</ParamField>
+
+## Behavior
+
+### Deposits (ext_amount > 0)
+
+1. Validates deposit amount is within the limit
+2. Transfers SOL from signer to tree_token_account
+3. Validates and deducts deposit fee
+4. Verifies zero-knowledge proof
+5. Appends output commitments to merkle tree
+6. Emits commitment events with encrypted outputs
+
+### Withdrawals (ext_amount < 0)
+
+1. Verifies merkle root is known
+2. Validates zero-knowledge proof
+3. Transfers SOL from tree_token_account to recipient
+4. Deducts and transfers withdrawal fee
+5. Appends output commitments to merkle tree
+6. Emits commitment events with encrypted outputs
+
+## Code Example
+
+```typescript
+import * as anchor from "@coral-xyz/anchor";
+import { PublicKey } from "@solana/web3.js";
+
+const depositAmount = 20000; // 0.00002 SOL
+const depositFee = 0; // 0% deposit fee
+
+// Create proof and encrypted outputs (simplified)
+const proof = await generateProof(inputs, outputs, extData);
+const encryptedOutput1 = Buffer.from("encrypted_data_1");
+const encryptedOutput2 = Buffer.from("encrypted_data_2");
+
+const extDataMinified = {
+  extAmount: new anchor.BN(depositAmount),
+  fee: new anchor.BN(depositFee)
+};
+
+// Find nullifier PDAs
+const [nullifier0PDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("nullifier0"), Buffer.from(proof.inputNullifiers[0])],
+  program.programId
+);
+
+const [nullifier1PDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("nullifier1"), Buffer.from(proof.inputNullifiers[1])],
+  program.programId
+);
+
+// Cross-check nullifiers
+const [nullifier2PDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("nullifier0"), Buffer.from(proof.inputNullifiers[1])],
+  program.programId
+);
+
+const [nullifier3PDA] = PublicKey.findProgramAddressSync(
+  [Buffer.from("nullifier1"), Buffer.from(proof.inputNullifiers[0])],
+  program.programId
+);
+
+// Execute transaction
+const tx = await program.methods
+  .transact(proof, extDataMinified, encryptedOutput1, encryptedOutput2)
+  .accounts({
+    treeAccount: treeAccountPDA,
+    nullifier0: nullifier0PDA,
+    nullifier1: nullifier1PDA,
+    nullifier2: nullifier2PDA,
+    nullifier3: nullifier3PDA,
+    recipient: recipientPublicKey,
+    feeRecipientAccount: feeRecipientPublicKey,
+    treeTokenAccount: treeTokenAccountPDA,
+    globalConfig: globalConfigPDA,
+    signer: userPublicKey,
+    systemProgram: anchor.web3.SystemProgram.programId
+  })
+  .signers([userKeypair])
+  .rpc();
+```
+
+## Events
+
+This instruction emits two `CommitmentData` events:
+
+```rust
+pub struct CommitmentData {
+    pub index: u64,
+    pub commitment: [u8; 32],
+    pub encrypted_output: Vec<u8>,
+}
+```
+
+- **index**: Position in the merkle tree
+- **commitment**: The UTXO commitment hash
+- **encrypted_output**: Encrypted UTXO data for the recipient
+
+## Validations
+
+<AccordionGroup>
+  <Accordion title="Merkle Root Verification">
+    The proof's root must exist in the tree's root history (last 100 roots).
+  </Accordion>
+  
+  <Accordion title="External Data Hash">
+    The hash of the external data must match the hash in the proof.
+  </Accordion>
+  
+  <Accordion title="Public Amount Calculation">
+    Validates: `public_amount = ext_amount - fee (mod field_size)`
+  </Accordion>
+  
+  <Accordion title="Fee Validation">
+    - Deposits: Fee must be within error margin of `amount * deposit_fee_rate`
+    - Withdrawals: Fee must be within error margin of `amount * withdrawal_fee_rate`
+    - Error margin default: 5%
+  </Accordion>
+  
+  <Accordion title="Zero-Knowledge Proof">
+    Groth16 proof verification using the program's verifying key.
+  </Accordion>
+  
+  <Accordion title="Deposit Limit">
+    Deposit amount must not exceed `max_deposit_amount` (default: 1,000 SOL).
+  </Accordion>
+  
+  <Accordion title="Nullifier Uniqueness">
+    Nullifier accounts must not already exist (prevents double-spending).
+  </Accordion>
+</AccordionGroup>
+
+## Errors
+
+<ResponseField name="UnknownRoot" type="Error">
+  The merkle root in the proof is not found in the tree's root history.
+</ResponseField>
+
+<ResponseField name="ExtDataHashMismatch" type="Error">
+  The calculated external data hash doesn't match the proof's ext_data_hash.
+</ResponseField>
+
+<ResponseField name="InvalidPublicAmountData" type="Error">
+  Public amount calculation is incorrect.
+</ResponseField>
+
+<ResponseField name="InvalidProof" type="Error">
+  Zero-knowledge proof verification failed.
+</ResponseField>
+
+<ResponseField name="DepositLimitExceeded" type="Error">
+  Deposit amount exceeds the maximum allowed deposit.
+</ResponseField>
+
+<ResponseField name="InsufficientFundsForWithdrawal" type="Error">
+  Tree token account has insufficient SOL for the withdrawal.
+</ResponseField>
+
+<ResponseField name="InsufficientFundsForFee" type="Error">
+  Tree token account has insufficient SOL to pay the fee.
+</ResponseField>
+
+<ResponseField name="InvalidFeeAmount" type="Error">
+  Fee is below the minimum required amount.
+</ResponseField>
+
+## See Also
+
+- [transact_spl](/reference/instructions/transact-spl) - Transact with SPL tokens
+- [initialize](/reference/instructions/initialize) - Initialize the program
+- [update_deposit_limit](/reference/instructions/update-deposit-limit) - Update deposit limits

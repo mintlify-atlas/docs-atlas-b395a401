@@ -1,122 +1,133 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Privacy Cash",
+  "theme": "aspen",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#8B5CF6",
+    "light": "#A78BFA",
+    "dark": "#6D28D9"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/Privacy-Cash/privacy-cash"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/Privacy-Cash/privacy-cash"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Concepts",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "concepts/how-it-works",
+              "concepts/privacy-model",
+              "concepts/zero-knowledge-proofs",
+              "concepts/merkle-trees",
+              "concepts/commitments-and-nullifiers"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "SDK Integration",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "sdk/overview",
+              "sdk/installation",
+              "sdk/basic-usage",
+              "sdk/examples"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Deployment",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "deployment/overview",
+              "deployment/devnet",
+              "deployment/mainnet",
+              "deployment/verification"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/audits",
+              "security/safety-features",
+              "security/best-practices"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "Program Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Instructions",
             "pages": [
-              "api-reference/introduction"
+              "reference/instructions/initialize",
+              "reference/instructions/transact",
+              "reference/instructions/transact-spl",
+              "reference/instructions/initialize-spl-tree",
+              "reference/instructions/update-deposit-limit",
+              "reference/instructions/update-global-config"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Accounts",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "reference/accounts/merkle-tree-account",
+              "reference/accounts/global-config",
+              "reference/accounts/nullifier-account",
+              "reference/accounts/tree-token-account"
+            ]
+          },
+          {
+            "group": "Data Structures",
+            "pages": [
+              "reference/structures/proof",
+              "reference/structures/ext-data"
+            ]
+          },
+          {
+            "group": "Errors",
+            "pages": [
+              "reference/errors"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Advanced",
+        "groups": [
+          {
+            "group": "Architecture",
+            "pages": [
+              "advanced/circuits",
+              "advanced/groth16-verification",
+              "advanced/merkle-tree-implementation"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "advanced/fee-management",
+              "advanced/supported-tokens",
+              "advanced/deposit-limits"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

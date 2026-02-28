@@ -1,0 +1,228 @@
+---
+title: Introduction to Privacy Cash
+description: Transfer SOL and SPL tokens privately on Solana using zero-knowledge proofs
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Privacy Cash Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Privacy Cash Hero Dark"
+/>
+
+## Overview
+
+Privacy Cash is a privacy protocol on Solana that enables confidential transactions using zero-knowledge proofs. The protocol allows users to shield and withdraw SOL (with SPL token support coming soon) without revealing transaction linkages.
+
+The program is fully audited by Accretion, HashCloak, Zigtur and Kriko, and verified onchain with hash:
+
+```
+c6f1e5336f2068dc1c1e1c64e92e3d8495b8df79f78011e2620af60aa43090c5
+```
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get started with Privacy Cash in minutes
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Install dependencies and set up your environment
+  </Card>
+  <Card
+    title="Privacy Cash SDK"
+    icon="code"
+    href="https://github.com/Privacy-Cash/privacy-cash-sdk"
+  >
+    Integrate Privacy Cash into your project
+  </Card>
+  <Card
+    title="GitHub Repository"
+    icon="github"
+    href="https://github.com/Privacy-Cash"
+  >
+    View the source code and contribute
+  </Card>
+</CardGroup>
+
+## How it works
+
+Privacy Cash implements a privacy protocol with two core operations:
+
+<Steps>
+  <Step title="Shield SOL">
+    Deposit SOL into a privacy pool, generating a commitment that is added to a Merkle tree. The commitment contains your amount and a secret keypair, but reveals nothing about the owner.
+  </Step>
+  <Step title="Withdraw SOL">
+    Withdraw SOL from the privacy pool to any recipient address using zero-knowledge proofs. The proof demonstrates you own a valid commitment in the tree without revealing which one.
+  </Step>
+</Steps>
+
+<Note>
+  The implementation uses zero-knowledge proofs to ensure that withdrawals cannot be linked to deposits, providing privacy for Solana transactions.
+</Note>
+
+## Key features
+
+### Zero-knowledge privacy
+
+Privacy Cash uses Groth16 zero-knowledge proofs on the BN254 elliptic curve to verify transactions without revealing sensitive information. Each transaction proves:
+
+- The spender owns valid commitments in the Merkle tree
+- The input and output amounts balance correctly
+- Nullifiers have not been used before (preventing double spends)
+
+All without revealing which commitments are being spent or linking deposits to withdrawals.
+
+### Merkle tree commitment scheme
+
+Commitments are stored in a sparse Merkle tree with:
+
+- **Height**: 26 levels
+- **Root history**: 100 previous roots maintained for proof flexibility
+- **Poseidon hash**: Gas-efficient hash function optimized for zero-knowledge circuits
+
+Each commitment is computed as:
+
+```typescript
+commitment = PoseidonHash(amount, publicKey, blinding, mintAddress)
+```
+
+### UTXO model
+
+Privacy Cash implements a UTXO (Unspent Transaction Output) model similar to Bitcoin and Tornado Cash Nova:
+
+<CodeGroup>
+
+```typescript UTXO structure
+export class Utxo {
+  amount: BN;
+  blinding: BN;           // Random value for hiding commitment
+  keypair: Keypair;       // Private key signs, public key = PoseidonHash(privateKey)
+  index: number;          // Position in Merkle tree
+  mintAddress: string;    // SOL or SPL token mint
+
+  async getCommitment(): Promise<string> {
+    const mintAddressField = getMintAddressField(new PublicKey(this.mintAddress));
+    return this.lightWasm.poseidonHashString([
+      this.amount.toString(), 
+      this.keypair.pubkey.toString(), 
+      this.blinding.toString(), 
+      mintAddressField
+    ]);
+  }
+
+  async getNullifier(): Promise<string> {
+    const commitment = await this.getCommitment();
+    const signature = this.keypair.sign(commitment, this.index.toString());
+    return this.lightWasm.poseidonHashString([
+      commitment, 
+      this.index.toString(), 
+      signature
+    ]);
+  }
+}
+```
+
+</CodeGroup>
+
+### Fee structure
+
+<CardGroup cols={2}>
+  <Card title="Deposit fee" icon="arrow-down">
+    **0%** - Deposits are completely free
+  </Card>
+  <Card title="Withdrawal fee" icon="arrow-up">
+    **0.25%** - Small fee on withdrawals (25 basis points)
+  </Card>
+</CardGroup>
+
+<Info>
+  Fees are configurable by the protocol authority and include a 5% error margin for tolerance.
+</Info>
+
+### Supported tokens
+
+**Mainnet**: USDC, USDT, ORE, ZEC, stORE, jlUSDC, jlWSOL  
+**Devnet**: USDC, USDT, ORE, ZEC, stORE, jlUSDC, jlWSOL (testnet versions)
+
+<Note>
+  Additional SPL tokens can be enabled by the protocol authority through the `initialize_tree_account_for_spl_token` instruction.
+</Note>
+
+## Program addresses
+
+<CodeGroup>
+
+```bash Mainnet
+9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD
+```
+
+```bash Devnet
+ATZj4jZ4FFzkvAcvk27DW9GRkgSbFnHo49fKKPQXU7VS
+```
+
+</CodeGroup>
+
+## Security
+
+Privacy Cash has been audited by multiple security firms:
+
+- **Accretion** - Smart contract security audit
+- **HashCloak** - Zero-knowledge proof audit
+- **Zigtur** - Cryptography review
+- **Kriko** - Full protocol audit
+
+The program is verifiable onchain, allowing anyone to verify the deployed bytecode matches the audited source code.
+
+<Warning>
+  While the protocol has been audited, use at your own risk. Never deposit more than you can afford to lose.
+</Warning>
+
+## Architecture
+
+The Privacy Cash repository is structured as follows:
+
+```
+privacy-cash/
+├── anchor/              # Solana program (smart contract)
+│   ├── programs/
+│   │   └── zkcash/
+│   │       └── src/     # Rust source code
+│   └── tests/           # TypeScript integration tests
+├── circuits/            # Zero-knowledge circuit definitions
+├── artifacts/           # Compiled circuit artifacts
+│   └── circuits/
+│       ├── transaction2_js/
+│       └── verifyingkey2.json
+└── scripts/             # Deployment and utility scripts
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick start guide"
+    icon="play"
+    href="/quickstart"
+  >
+    Start using Privacy Cash with our quick start tutorial
+  </Card>
+  <Card
+    title="Install dependencies"
+    icon="terminal"
+    href="/installation"
+  >
+    Set up your development environment
+  </Card>
+</CardGroup>

@@ -1,0 +1,68 @@
+---
+title: "Proof"
+description: "Zero-knowledge proof data structure containing cryptographic proof components and public inputs"
+---
+
+The `Proof` struct contains all the components of a Groth16 zero-knowledge proof and the public inputs required to verify a private transaction.
+
+## Structure Definition
+
+All public inputs are encoded in big-endian format.
+
+<ResponseField name="proof_a" type="[u8; 64]" required>
+  First component of the Groth16 proof (G1 point)
+</ResponseField>
+
+<ResponseField name="proof_b" type="[u8; 128]" required>
+  Second component of the Groth16 proof (G2 point)
+</ResponseField>
+
+<ResponseField name="proof_c" type="[u8; 64]" required>
+  Third component of the Groth16 proof (G1 point)
+</ResponseField>
+
+<ResponseField name="root" type="[u8; 32]" required>
+  Merkle tree root at the time the proof was generated. Must match a root in the tree's history to be considered valid.
+</ResponseField>
+
+<ResponseField name="public_amount" type="[u8; 32]" required>
+  The public amount being transacted, calculated as `ext_amount + fee`. This value is part of the zero-knowledge circuit's public inputs.
+</ResponseField>
+
+<ResponseField name="ext_data_hash" type="[u8; 32]" required>
+  Hash of the external data (ExtData) that accompanies this transaction. Used to bind the proof to specific transaction parameters like recipient and fee.
+</ResponseField>
+
+<ResponseField name="input_nullifiers" type="[[u8; 32]; 2]" required>
+  Array of two nullifiers corresponding to the two input notes being spent. Each nullifier can only be used once, preventing double-spending.
+</ResponseField>
+
+<ResponseField name="output_commitments" type="[[u8; 32]; 2]" required>
+  Array of two commitments corresponding to the two output notes being created. These are added to the Merkle tree.
+</ResponseField>
+
+## Usage
+
+The `Proof` struct is used in both `transact` and `transact_spl` instructions:
+
+```rust
+pub fn transact(
+    ctx: Context<Transact>, 
+    proof: Proof, 
+    ext_data_minified: ExtDataMinified, 
+    encrypted_output1: Vec<u8>, 
+    encrypted_output2: Vec<u8>
+) -> Result<()>
+```
+
+## Verification Process
+
+1. **Root Verification**: The `proof.root` must exist in the Merkle tree's root history
+2. **ExtData Hash**: The `proof.ext_data_hash` must match the hash of the provided ExtData
+3. **Public Amount**: The `proof.public_amount` must equal `ext_amount + fee`
+4. **Cryptographic Proof**: The Groth16 proof components (`proof_a`, `proof_b`, `proof_c`) are verified against the circuit's verifying key
+5. **Nullifiers**: The `input_nullifiers` must not have been used before (enforced by PDA account creation)
+
+## Related Types
+
+- [ExtData](/reference/structures/ext-data) - External transaction data that is hashed and verified against `ext_data_hash`

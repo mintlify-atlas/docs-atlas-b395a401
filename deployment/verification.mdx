@@ -1,0 +1,322 @@
+---
+title: Program Verification
+description: Verify Privacy Cash program builds are reproducible and match deployed bytecode
+---
+
+Program verification ensures transparency and builds trust by allowing anyone to verify that the deployed program matches the published source code.
+
+## Why Verify?
+
+Verifying your deployed program provides:
+
+- **Transparency**: Users can verify what code is actually running
+- **Trust**: Proves the deployed bytecode matches the audited source
+- **Security**: Detects unauthorized modifications
+- **Compliance**: Meets requirements for audited programs
+
+<Note>
+The Privacy Cash mainnet program is fully verified with hash: `c6f1e5336f2068dc1c1e1c64e92e3d8495b8df79f78011e2620af60aa43090c5`
+</Note>
+
+## Verifiable Builds
+
+Anchor supports verifiable builds that can be reproduced deterministically.
+
+### Build for Verification
+
+Always use the `--verifiable` flag for mainnet deployments:
+
+```bash
+anchor build --verifiable
+```
+
+This creates a Docker container with a fixed environment to ensure reproducible builds.
+
+### What Makes a Build Verifiable?
+
+Verifiable builds:
+- Use Docker for consistent build environment
+- Pin all dependency versions
+- Produce deterministic binary output
+- Can be rebuilt by anyone with the same result
+
+## Verification Process
+
+<Steps>
+  <Step title="Get Program Hash">
+    Retrieve the hash of the deployed program:
+    
+    ```bash
+    solana program dump 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD program.so --url mainnet-beta
+    sha256sum program.so
+    ```
+  </Step>
+  
+  <Step title="Build Locally">
+    Clone the repository and build:
+    
+    ```bash
+    git clone https://github.com/Privacy-Cash/privacy-cash
+    cd privacy-cash/anchor
+    anchor build --verifiable
+    ```
+  </Step>
+  
+  <Step title="Compare Hashes">
+    Calculate the hash of your local build:
+    
+    ```bash
+    sha256sum target/deploy/zkcash.so
+    ```
+    
+    Compare with the deployed program hash. They should match exactly.
+  </Step>
+</Steps>
+
+## Verify on Solana Explorer
+
+Solana Explorer provides built-in verification tools:
+
+<Steps>
+  <Step title="Navigate to Program">
+    Visit the program on [Solana Explorer](https://explorer.solana.com/address/9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD)
+  </Step>
+  
+  <Step title="Check Verification Status">
+    Look for the "Verified Build" badge
+  </Step>
+  
+  <Step title="View Build Details">
+    Click to see:
+    - Build hash
+    - Source repository
+    - Build instructions
+    - Verification timestamp
+  </Step>
+</Steps>
+
+## Using Anchor Verify
+
+Anchor provides a built-in verification command:
+
+```bash
+anchor verify 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD --provider.cluster mainnet
+```
+
+This command:
+- Downloads the deployed program
+- Compares it with your local build
+- Reports any differences
+
+### Successful Verification Output
+
+```
+✅ Verification successful!
+Deployed program hash matches local build.
+```
+
+### Failed Verification
+
+If verification fails:
+
+```
+❌ Verification failed!
+Deployed hash: c6f1e5336f2068dc1c1e1c64e92e3d8495b8df79f78011e2620af60aa43090c5
+Local hash:    [different-hash]
+```
+
+Possible causes:
+- Different source code version
+- Modified dependencies
+- Non-deterministic build settings
+- Using non-verifiable build
+
+## Verifying Historical Deployments
+
+To verify a specific program version:
+
+<Steps>
+  <Step title="Find the Commit">
+    Identify the git commit hash for the deployment:
+    
+    ```bash
+    git log --oneline
+    ```
+  </Step>
+  
+  <Step title="Checkout the Version">
+    ```bash
+    git checkout <commit-hash>
+    ```
+  </Step>
+  
+  <Step title="Build and Verify">
+    ```bash
+    anchor build --verifiable
+    anchor verify 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD --provider.cluster mainnet
+    ```
+  </Step>
+</Steps>
+
+## Docker-based Verification
+
+For fully reproducible verification, use Docker directly:
+
+```bash
+# Build in Docker
+docker run --rm -v $(pwd):/workspace \
+  projectserum/build:v0.31.1 \
+  bash -c "cd /workspace/anchor && anchor build --verifiable"
+
+# Compare output
+sha256sum anchor/target/deploy/zkcash.so
+```
+
+This ensures:
+- Same OS and environment
+- Same toolchain versions
+- Same build flags
+- Reproducible output
+
+## Continuous Verification
+
+Set up automated verification in CI/CD:
+
+```yaml
+# .github/workflows/verify.yml
+name: Verify Program
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      
+      - name: Install Anchor
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli
+      
+      - name: Build Verifiable
+        run: |
+          cd anchor
+          anchor build --verifiable
+      
+      - name: Verify Against Mainnet
+        run: |
+          anchor verify 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD --provider.cluster mainnet
+```
+
+## Publishing Verification Results
+
+Share verification results with your community:
+
+### Generate Verification Report
+
+```bash
+# Dump deployed program
+solana program dump 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD deployed.so --url mainnet-beta
+
+# Build locally
+anchor build --verifiable
+
+# Compare and document
+echo "Deployed SHA256: $(sha256sum deployed.so)" > verification.txt
+echo "Local SHA256:    $(sha256sum target/deploy/zkcash.so)" >> verification.txt
+echo "Git Commit:      $(git rev-parse HEAD)" >> verification.txt
+echo "Build Date:      $(date -u)" >> verification.txt
+```
+
+### Verification Artifacts
+
+Commit verification evidence:
+- Build hash
+- Git commit hash
+- Build timestamp
+- Anchor version
+- Rust toolchain version
+
+## Common Verification Issues
+
+### Different Hashes on Rebuild
+
+**Problem**: Local build produces different hash
+
+**Solutions**:
+- Use `--verifiable` flag
+- Check Anchor version matches (`anchor --version`)
+- Verify Rust toolchain version
+- Ensure clean build (`rm -rf target`)
+- Check for uncommitted changes
+
+### Docker Build Fails
+
+**Problem**: Verifiable build fails in Docker
+
+**Solutions**:
+- Update Docker image version
+- Check Docker has sufficient resources
+- Clear Docker build cache
+- Verify Anchor.toml configuration
+
+### Cannot Dump Program
+
+**Problem**: `solana program dump` fails
+
+**Solutions**:
+- Check RPC endpoint is responsive
+- Verify program ID is correct
+- Use different RPC if rate-limited
+- Ensure sufficient disk space
+
+## Verification Best Practices
+
+<Warning>
+Follow these practices for reliable verification:
+</Warning>
+
+- **Always use `--verifiable`** for production deployments
+- **Tag releases** in git for reproducibility
+- **Document build environment** (Anchor version, Rust version)
+- **Automate verification** in CI/CD pipeline
+- **Publish verification results** for transparency
+- **Re-verify after upgrades** to ensure integrity
+- **Keep build artifacts** for historical reference
+
+## Privacy Cash Verification Data
+
+### Mainnet Program
+
+```
+Program ID: 9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD
+Verification Hash: c6f1e5336f2068dc1c1e1c64e92e3d8495b8df79f78011e2620af60aa43090c5
+Anchor Version: 0.31.1
+Rust Version: 1.79.0
+Audit Status: Verified by Accretion, HashCloak, Zigtur, and Kriko
+```
+
+### Devnet Program
+
+```
+Program ID: ATZj4jZ4FFzkvAcvk27DW9GRkgSbFnHo49fKKPQXU7VS
+Network: Devnet
+Purpose: Testing and development
+```
+
+## Further Reading
+
+- [Anchor Verifiable Builds Documentation](https://www.anchor-lang.com/docs/verifiable-builds)
+- [Solana Program Deployment Guide](https://docs.solana.com/cli/deploy-a-program)
+- [Reproducible Builds Best Practices](https://reproducible-builds.org/)
+
+## Support
+
+If you encounter verification issues:
+
+- Check the [GitHub repository](https://github.com/Privacy-Cash/privacy-cash) for updates
+- Review closed issues for similar problems
+- Open a new issue with verification logs
+- Join the community for assistance

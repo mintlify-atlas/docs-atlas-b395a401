@@ -1,0 +1,403 @@
+---
+title: Installation
+description: Set up your development environment for Privacy Cash
+---
+
+## Overview
+
+This guide covers installing all dependencies needed to build and run Privacy Cash from source. If you're integrating Privacy Cash into an existing project, see the [Privacy Cash SDK](https://github.com/Privacy-Cash/privacy-cash-sdk) instead.
+
+## System requirements
+
+<CardGroup cols={2}>
+  <Card title="Operating system" icon="computer">
+    Linux, macOS, or Windows with WSL2
+  </Card>
+  <Card title="RAM" icon="memory">
+    8GB minimum, 16GB recommended
+  </Card>
+  <Card title="Disk space" icon="hard-drive">
+    At least 10GB free space
+  </Card>
+  <Card title="Internet" icon="wifi">
+    Required for downloading dependencies
+  </Card>
+</CardGroup>
+
+## Install Solana CLI
+
+<Steps>
+  <Step title="Download and install Solana CLI">
+    Install version 2.1.18 or later:
+
+    ```bash
+    sh -c "$(curl -sSfL https://release.solana.com/v2.1.18/install)"
+    ```
+  </Step>
+
+  <Step title="Add Solana to your PATH">
+    Add this to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.):
+
+    ```bash
+    export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+    ```
+
+    Then reload your shell:
+
+    ```bash
+    source ~/.bashrc  # or source ~/.zshrc
+    ```
+  </Step>
+
+  <Step title="Verify installation">
+    ```bash
+    solana --version
+    ```
+
+    You should see output like:
+    ```
+    solana-cli 2.1.18 (src:00000000; feat:1234567890)
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  Privacy Cash requires Solana CLI 2.1.18 or later for compatibility with the latest program features.
+</Note>
+
+## Install Rust
+
+<Steps>
+  <Step title="Install Rust using rustup">
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    ```
+
+    Follow the prompts to complete installation.
+  </Step>
+
+  <Step title="Install Rust 1.79.0">
+    Privacy Cash requires Rust 1.79.0 or a compatible version:
+
+    ```bash
+    rustup install 1.79.0
+    rustup default 1.79.0
+    ```
+  </Step>
+
+  <Step title="Verify Rust installation">
+    ```bash
+    rustc --version
+    cargo --version
+    ```
+
+    You should see:
+    ```
+    rustc 1.79.0 (129f3b996 2024-06-10)
+    cargo 1.79.0 (ffa9cf99a 2024-06-03)
+    ```
+  </Step>
+</Steps>
+
+## Install Anchor
+
+<Steps>
+  <Step title="Install Anchor version manager (avm)">
+    ```bash
+    cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+    ```
+  </Step>
+
+  <Step title="Install Anchor 0.31.1">
+    ```bash
+    avm install 0.31.1
+    avm use 0.31.1
+    ```
+  </Step>
+
+  <Step title="Verify Anchor installation">
+    ```bash
+    anchor --version
+    ```
+
+    You should see:
+    ```
+    anchor-cli 0.31.1
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  Privacy Cash is built with Anchor 0.31.1. Using a different version may cause compilation errors.
+</Warning>
+
+## Install Node.js and npm
+
+<Steps>
+  <Step title="Install Node.js 16 or later">
+    Using nvm (recommended):
+
+    ```bash
+    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+    source ~/.bashrc  # or source ~/.zshrc
+    nvm install 18
+    nvm use 18
+    ```
+
+    Or download directly from [nodejs.org](https://nodejs.org/).
+  </Step>
+
+  <Step title="Verify Node.js and npm">
+    ```bash
+    node --version
+    npm --version
+    ```
+
+    You should see:
+    ```
+    v18.x.x
+    9.x.x
+    ```
+  </Step>
+</Steps>
+
+## Install Circom
+
+Circom is required to work with zero-knowledge circuits.
+
+<Steps>
+  <Step title="Install dependencies">
+    <Tabs>
+      <Tab title="Ubuntu/Debian">
+        ```bash
+        sudo apt-get install build-essential libgmp-dev libsodium-dev nasm git
+        ```
+      </Tab>
+
+      <Tab title="macOS">
+        ```bash
+        brew install gmp libsodium nasm
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Download and install Circom v2.2.2">
+    ```bash
+    git clone https://github.com/iden3/circom.git
+    cd circom
+    git checkout v2.2.2
+    cargo build --release
+    cargo install --path circom
+    ```
+  </Step>
+
+  <Step title="Verify Circom installation">
+    ```bash
+    circom --version
+    ```
+
+    You should see:
+    ```
+    circom compiler 2.2.2
+    ```
+  </Step>
+</Steps>
+
+<Info>
+  Circom is used to compile the zero-knowledge circuits in the `circuits/` directory. The compiled artifacts are already included in `artifacts/circuits/`, so you only need Circom if you're modifying circuits.
+</Info>
+
+## Install project dependencies
+
+Once all system tools are installed, set up the Privacy Cash project:
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/Privacy-Cash/privacy-cash.git
+    cd privacy-cash/anchor
+    ```
+  </Step>
+
+  <Step title="Install npm dependencies">
+    The project uses yarn as the package manager (configured in `Anchor.toml`):
+
+    ```bash
+    yarn install
+    ```
+
+    Or if using npm:
+
+    ```bash
+    npm install
+    ```
+
+    This installs all required packages including:
+    - `@coral-xyz/anchor` - Anchor framework client
+    - `@solana/spl-token` - SPL token utilities
+    - `snarkjs` - Zero-knowledge proof library
+    - `@lightprotocol/hasher.rs` - Poseidon hash implementation
+    - `circomlib` - Circuit library
+  </Step>
+
+  <Step title="Build the program">
+    ```bash
+    anchor build
+    ```
+
+    This compiles the Rust program and generates TypeScript types.
+  </Step>
+</Steps>
+
+## Verify installation
+
+Run the test suite to ensure everything is working:
+
+```bash
+npm run test:sol
+```
+
+You should see output indicating tests are passing:
+
+```
+zkcash
+  ✓ Double spend attack fails (15234ms)
+  ✓ Can execute both deposit and withdraw instruction for correct input, with positive fee (18567ms)
+  ✓ Can execute both deposit and withdraw instruction to PDA recipient, with positive fee (17891ms)
+
+3 passing (52s)
+```
+
+<Note>
+  The first test run may take longer as it compiles the circuits and generates proving keys.
+</Note>
+
+## Package versions
+
+For reference, here are the exact package versions used by Privacy Cash:
+
+<Accordion title="View package.json dependencies">
+  ```json
+  {
+    "dependencies": {
+      "@coral-xyz/anchor": "^0.31.0",
+      "@solana/spl-token": "^0.4.14",
+      "circomlib": "^2.0.5",
+      "ffjavascript": "^0.3.1"
+    },
+    "devDependencies": {
+      "@ethersproject/sha2": "^5.8.0",
+      "@lightprotocol/hasher.rs": "^0.2.1",
+      "@types/bn.js": "^5.1.0",
+      "@types/chai": "^4.3.0",
+      "@types/mocha": "^9.0.0",
+      "bn.js": "^5.2.2",
+      "borsh": "^2.0.0",
+      "chai": "^4.3.4",
+      "ethers": "^6.13.7",
+      "mocha": "^9.0.3",
+      "prettier": "^2.6.2",
+      "snarkjs": "^0.7.5",
+      "tmp-promise": "^3.0.2",
+      "ts-mocha": "^10.0.0",
+      "typescript": "^5.7.3"
+    }
+  }
+  ```
+</Accordion>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Anchor build fails with 'rustc version mismatch'">
+    Ensure you're using Rust 1.79.0:
+
+    ```bash
+    rustup default 1.79.0
+    ```
+
+    Clean and rebuild:
+
+    ```bash
+    anchor clean
+    anchor build
+    ```
+  </Accordion>
+
+  <Accordion title="npm install fails on @lightprotocol/hasher.rs">
+    This package requires Rust to build native modules. Ensure you have:
+
+    1. Rust installed and in your PATH
+    2. Build tools installed (gcc, make, etc.)
+
+    On Ubuntu/Debian:
+    ```bash
+    sudo apt-get install build-essential
+    ```
+
+    On macOS:
+    ```bash
+    xcode-select --install
+    ```
+  </Accordion>
+
+  <Accordion title="Tests timeout or fail">
+    Tests generate zero-knowledge proofs which are CPU-intensive:
+
+    1. Ensure you have at least 8GB RAM available
+    2. Close other applications to free up CPU
+    3. Increase the Mocha timeout in `package.json` if needed
+
+    The test script already sets a high timeout:
+    ```json
+    "test": "yarn run ts-mocha -p ./tsconfig.json -t 1000000"
+    ```
+  </Accordion>
+
+  <Accordion title="Solana CLI commands fail">
+    Ensure Solana is in your PATH:
+
+    ```bash
+    which solana
+    ```
+
+    If not found, add to your shell profile:
+    ```bash
+    export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick start guide"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Build and test Privacy Cash
+  </Card>
+  <Card
+    title="Introduction"
+    icon="book"
+    href="/introduction"
+  >
+    Learn how Privacy Cash works
+  </Card>
+  <Card
+    title="Privacy Cash SDK"
+    icon="code"
+    href="https://github.com/Privacy-Cash/privacy-cash-sdk"
+  >
+    Integrate into your project
+  </Card>
+  <Card
+    title="GitHub Issues"
+    icon="github"
+    href="https://github.com/Privacy-Cash/privacy-cash/issues"
+  >
+    Get help or report problems
+  </Card>
+</CardGroup>

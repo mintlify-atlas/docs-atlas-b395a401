@@ -1,0 +1,738 @@
+---
+title: 'Commitments and Nullifiers'
+description: 'Deep dive into the cryptographic primitives that enable private transactions and prevent double-spending'
+icon: 'fingerprint'
+---
+
+## Overview
+
+Commitments and nullifiers are the core cryptographic primitives in Privacy Cash that enable both **transaction privacy** and **double-spend prevention**.
+
+<CardGroup cols={2}>
+  <Card title="Commitments" icon="lock">
+    **Hide transaction details**
+    
+    A commitment is a cryptographic hash that represents a UTXO (amount + owner + blinding) without revealing its contents.
+  </Card>
+  
+  <Card title="Nullifiers" icon="ban">
+    **Prevent double-spending**
+    
+    A nullifier is a unique identifier derived from a commitment that marks it as "spent" without revealing which commitment was spent.
+  </Card>
+</CardGroup>
+
+<Info>
+Together, commitments and nullifiers enable the fundamental tradeoff: **Privacy without double-spending.**
+</Info>
+
+## Commitments
+
+### What is a Commitment?
+
+A **commitment** is a cryptographic hash that binds a user to a specific UTXO without revealing its details.
+
+```typescript UTXO Structure
+interface UTXO {
+  amount: bigint;        // Amount of SOL or tokens
+  pubkey: bigint;        // Public key (derived from private key)
+  blinding: bigint;      // Random blinding factor
+  mintAddress: PublicKey; // Token type (SOL or SPL token)
+}
+
+// Commitment = Poseidon(amount, pubkey, blinding, mintAddress)
+const commitment = poseidon([utxo.amount, utxo.pubkey, utxo.blinding, utxo.mintAddress]);
+```
+
+### Commitment Properties
+
+<AccordionGroup>
+  <Accordion title="Hiding">
+    The commitment reveals nothing about the underlying UTXO.
+    
+    **What's hidden:**
+    - Amount: How much SOL/tokens
+    - Owner: Who owns it (pubkey)
+    - Blinding: Random entropy
+    - Mint: Which token (if multiple tokens have similar commitments)
+    
+    **Why secure:**
+    - Poseidon is a cryptographic hash (pre-image resistant)
+    - Given only the commitment, you cannot determine the UTXO
+    - Blinding adds randomness so identical amounts have different commitments
+  </Accordion>
+  
+  <Accordion title="Binding">
+    The commitment uniquely binds to exactly one UTXO.
+    
+    **Properties:**
+    - Changing any UTXO field changes the commitment (collision resistant)
+    - Owner can prove they created the commitment (using zero-knowledge proof)
+    - Others cannot modify the UTXO without detection
+    
+    **Example:**
+    ```typescript
+    // Same amount, different blinding → different commitments
+    const utxo1 = { amount: 1e9, pubkey, blinding: random(), mint };
+    const utxo2 = { amount: 1e9, pubkey, blinding: random(), mint };
+    
+    commitment1 = hash(utxo1); // e.g., 0x1a2b3c...
+    commitment2 = hash(utxo2); // e.g., 0x9f8e7d... (different!)
+    ```
+  </Accordion>
+  
+  <Accordion title="Public">
+    Commitments are stored on-chain in the Merkle tree and are publicly visible.
+    
+    **What observers see:**
+    - The commitment hash (32 bytes)
+    - When it was created (block timestamp)
+    - Its position in the Merkle tree (index)
+    - Encrypted output data (for intended recipient)
+    
+    **What observers don't see:**
+    - The UTXO details (amount, owner, etc.)
+    - Which commitment is yours
+    - When/if a commitment is spent (until nullifier is revealed)
+  </Accordion>
+</AccordionGroup>
+
+### Commitment Scheme
+
+Privacy Cash uses **Poseidon hash** for commitments:
+
+```circom From transaction.circom:58
+component inCommitmentHasher[nIns];
+
+inCommitmentHasher[tx] = Poseidon(4);
+inCommitmentHasher[tx].inputs[0] <== inAmount[tx];
+inCommitmentHasher[tx].inputs[1] <== inKeypair[tx].publicKey;
+inCommitmentHasher[tx].inputs[2] <== inBlinding[tx];
+inCommitmentHasher[tx].inputs[3] <== mintAddress;
+
+commitment <== inCommitmentHasher[tx].out;
+```
+
+**Formula:**
+```
+commitment = Poseidon(amount, pubkey, blinding, mintAddress)
+```
+
+Where:
+- `amount` ∈ [0, 2^248) (enforced in circuit)
+- `pubkey = Poseidon(privateKey)`
+- `blinding` ∈ [0, FIELD_SIZE) (random)
+- `mintAddress` = Native SOL or SPL token mint
+
+### Creating Commitments
+
+<Steps>
+  <Step title="Generate Keypair">
+    Create or use existing private key:
+    
+    ```typescript
+    import { randomBytes } from 'crypto';
+    import { poseidon } from 'circomlibjs';
+    
+    // Generate random private key
+    const privateKey = BigInt('0x' + randomBytes(31).toString('hex'));
+    
+    // Derive public key
+    const publicKey = poseidon([privateKey]);
+    ```
+  </Step>
+  
+  <Step title="Generate Blinding Factor">
+    Create random blinding for commitment uniqueness:
+    
+    ```typescript
+    // Random 31-byte value (fits in BN254 field)
+    const blinding = BigInt('0x' + randomBytes(31).toString('hex'));
+    ```
+    
+    <Warning>
+    **Never reuse blinding factors!** Each commitment must have a unique blinding to prevent linkability.
+    </Warning>
+  </Step>
+  
+  <Step title="Compute Commitment">
+    Hash the UTXO data:
+    
+    ```typescript
+    const utxo = {
+      amount: BigInt(1_000_000_000), // 1 SOL
+      pubkey: publicKey,
+      blinding: blinding,
+      mintAddress: NATIVE_MINT, // SOL
+    };
+    
+    const commitment = poseidon([
+      utxo.amount,
+      utxo.pubkey,
+      utxo.blinding,
+      utxo.mintAddress,
+    ]);
+    ```
+  </Step>
+  
+  <Step title="Store UTXO Data">
+    Save UTXO details securely (needed for spending later):
+    
+    ```typescript
+    // Encrypt and store locally or in encrypted cloud backup
+    const encryptedUTXO = encrypt(utxo, encryptionKey);
+    await storage.save(commitment.toString(), encryptedUTXO);
+    
+    // Or store in browser localStorage (less secure)
+    localStorage.setItem(`utxo_${commitment}`, JSON.stringify(utxo));
+    ```
+    
+    <Note>
+    You need the full UTXO data to spend the commitment later. If you lose this data, the funds are unrecoverable.
+    </Note>
+  </Step>
+</Steps>
+
+### Encrypted Outputs
+
+When creating commitments on-chain, the depositor encrypts UTXO data for the recipient:
+
+```typescript
+import { encrypt } from '@privacy-cash/sdk';
+
+// Encrypt UTXO for recipient
+const encryptedOutput = encrypt({
+  amount: utxo.amount,
+  blinding: utxo.blinding,
+  // pubkey is derived by recipient from their private key
+}, recipientPublicKey);
+
+// Submit with transaction
+await program.methods
+  .transact(proof, extData, encryptedOutput, encryptedOutput2)
+  .rpc();
+```
+
+**On-chain events:**
+```rust From lib.rs:351
+emit!(CommitmentData {
+    index: next_index_to_insert,
+    commitment: proof.output_commitments[0],
+    encrypted_output: encrypted_output1.to_vec(),
+});
+```
+
+Recipients scan events and attempt to decrypt:
+
+```typescript
+// Listen for commitment events
+for (const event of commitmentEvents) {
+  try {
+    const utxo = decrypt(event.encrypted_output, myPrivateKey);
+    
+    // Verify the commitment matches
+    const expectedCommitment = poseidon([utxo.amount, myPublicKey, utxo.blinding, mint]);
+    if (expectedCommitment === event.commitment) {
+      // This commitment is mine!
+      myUTXOs.push({ commitment: event.commitment, utxo, index: event.index });
+    }
+  } catch (e) {
+    // Not for me, try next event
+  }
+}
+```
+
+## Nullifiers
+
+### What is a Nullifier?
+
+A **nullifier** is a unique identifier derived from a commitment that marks it as spent, without revealing which commitment it came from.
+
+```typescript
+// Nullifier = Poseidon(commitment, merkle_path, signature)
+const nullifier = poseidon([commitment, merkle_path, signature]);
+```
+
+### Nullifier Properties
+
+<AccordionGroup>
+  <Accordion title="Uniqueness">
+    Each commitment has exactly one valid nullifier.
+    
+    **Why unique:**
+    - Nullifier depends on commitment (different commitments → different nullifiers)
+    - Depends on signature (only owner can generate valid signature)
+    - Depends on Merkle path (where commitment is in tree)
+    
+    **Collision resistance:**
+    - Probability of two commitments having same nullifier ≈ 2^-256 (negligible)
+    - Guaranteed by Poseidon hash collision resistance
+  </Accordion>
+  
+  <Accordion title="Privacy-Preserving">
+    Nullifiers don't reveal which commitment was spent.
+    
+    **What attackers know:**
+    - A nullifier was revealed
+    - Some commitment was spent
+    - The nullifier value (random-looking hash)
+    
+    **What attackers don't know:**
+    - Which commitment the nullifier came from
+    - Who spent the commitment
+    - The commitment's amount or other details
+    
+    **Why secure:**
+    - Nullifier appears random due to hashing
+    - No linkage between nullifier and commitment hash
+    - Signature component prevents brute force
+  </Accordion>
+  
+  <Accordion title="Double-Spend Prevention">
+    Once a nullifier is published, the commitment cannot be spent again.
+    
+    **Mechanism:**
+    ```rust From lib.rs:602
+    // Create nullifier account (fails if already exists)
+    #[account(
+        init,  // Must not already exist
+        payer = signer,
+        space = 8 + std::mem::size_of::<NullifierAccount>(),
+        seeds = [b"nullifier0", proof.input_nullifiers[0].as_ref()],
+        bump
+    )]
+    pub nullifier0: Account<'info, NullifierAccount>,
+    ```
+    
+    **Double-spend attempt:**
+    1. User tries to spend same commitment twice
+    2. Generates same nullifier (deterministic)
+    3. Transaction fails: nullifier account already exists
+    4. No state changes occur (atomicity)
+    
+    <Info>
+    Double-spend prevention is enforced by Solana's account creation before proof verification, saving compute units on invalid transactions.
+    </Info>
+  </Accordion>
+</AccordionGroup>
+
+### Nullifier Generation
+
+Nullifiers are computed in the zero-knowledge circuit:
+
+```circom From transaction.circom:64
+// Generate signature from private key
+component inSignature[nIns];
+inSignature[tx] = Signature();
+inSignature[tx].privateKey <== inPrivateKey[tx];
+inSignature[tx].commitment <== inCommitmentHasher[tx].out;
+inSignature[tx].merklePath <== inPathIndices[tx];
+
+// Compute nullifier
+component inNullifierHasher[nIns];
+inNullifierHasher[tx] = Poseidon(3);
+inNullifierHasher[tx].inputs[0] <== inCommitmentHasher[tx].out;
+inNullifierHasher[tx].inputs[1] <== inPathIndices[tx];
+inNullifierHasher[tx].inputs[2] <== inSignature[tx].out;
+inNullifierHasher[tx].out === inputNullifier[tx];
+```
+
+**Where:**
+```circom From keypair.circom:15
+template Signature() {
+    signal input privateKey;
+    signal input commitment;
+    signal input merklePath;
+    signal output out;
+    
+    component hasher = Poseidon(3);
+    hasher.inputs[0] <== privateKey;
+    hasher.inputs[1] <== commitment;
+    hasher.inputs[2] <== merklePath;
+    out <== hasher.out;
+}
+```
+
+**Full formula:**
+```
+signature = Poseidon(privateKey, commitment, merklePath)
+nullifier = Poseidon(commitment, merklePath, signature)
+          = Poseidon(commitment, merklePath, Poseidon(privateKey, commitment, merklePath))
+```
+
+<Note>
+The signature component ensures only the commitment owner (who knows the private key) can generate the correct nullifier.
+</Note>
+
+### Nullifier Accounts
+
+On Solana, nullifiers are represented as PDA (Program Derived Address) accounts:
+
+```rust From lib.rs:602
+#[account]
+pub struct NullifierAccount {
+    pub bump: u8,
+}
+
+// PDA derivation
+seeds = [b"nullifier0", nullifier_hash]
+```
+
+**Why PDAs?**
+- **Deterministic**: Same nullifier always derives same address
+- **Ownerless**: Program owns the account, not a user
+- **Existence check**: Account creation fails if already exists
+- **No rent drain**: Nullifier accounts pay rent once, protect deposits forever
+
+<Tabs>
+  <Tab title="First Spend (Valid)">
+    ```typescript
+    // First time spending commitment
+    const tx = await program.methods
+      .transact(proof, extData, ...)
+      .accounts({
+        nullifier0: nullifier0PDA,  // Doesn't exist yet
+        // ...
+      })
+      .rpc();
+    
+    // ✅ Transaction succeeds
+    // - nullifier0 account created
+    // - Commitment marked as spent
+    ```
+  </Tab>
+  
+  <Tab title="Second Spend (Rejected)">
+    ```typescript
+    // Attempt to spend same commitment again
+    const tx = await program.methods
+      .transact(proof, extData, ...)
+      .accounts({
+        nullifier0: nullifier0PDA,  // Already exists!
+        // ...
+      })
+      .rpc();
+    
+    // ❌ Transaction fails with error:
+    // "Account already exists"
+    // 
+    // No funds transferred, no state changed
+    ```
+  </Tab>
+</Tabs>
+
+### Nullifier Collisions
+
+Privacy Cash prevents nullifier collisions between the two input slots:
+
+```rust From lib.rs:623
+// Ensure nullifier0 and nullifier1 don't collide
+#[account(
+    seeds = [b"nullifier0", proof.input_nullifiers[1].as_ref()],
+    bump
+)]
+pub nullifier2: SystemAccount<'info>,  // Must not exist
+
+#[account(
+    seeds = [b"nullifier1", proof.input_nullifiers[0].as_ref()],
+    bump
+)]
+pub nullifier3: SystemAccount<'info>,  // Must not exist
+```
+
+**Why needed:**
+- Without this check, a malicious user could use the same nullifier in both input slots
+- This would allow spending one commitment and receiving two outputs (printing money!)
+
+**Check logic:**
+1. Create `nullifier0` from `proof.input_nullifiers[0]` ✅
+2. Create `nullifier1` from `proof.input_nullifiers[1]` ✅
+3. Verify `nullifier2` (slot 0 seeds + nullifier[1]) doesn't exist ✅
+4. Verify `nullifier3` (slot 1 seeds + nullifier[0]) doesn't exist ✅
+
+If nullifiers are identical, step 3 or 4 fails (account already exists from step 1 or 2).
+
+## Commitment Lifecycle
+
+Follow a commitment from creation to spending:
+
+<Steps>
+  <Step title="Create UTXO">
+    Generate UTXO with random blinding:
+    
+    ```typescript
+    const utxo = {
+      amount: 1_000_000_000n,  // 1 SOL
+      pubkey: myPublicKey,
+      blinding: randomBytes(31),
+      mintAddress: NATIVE_MINT,
+    };
+    ```
+  </Step>
+  
+  <Step title="Compute Commitment">
+    Hash UTXO to create commitment:
+    
+    ```typescript
+    const commitment = poseidon([
+      utxo.amount,
+      utxo.pubkey,
+      utxo.blinding,
+      utxo.mintAddress,
+    ]);
+    // e.g., 0x1a2b3c4d5e6f7890...
+    ```
+  </Step>
+  
+  <Step title="Deposit to Pool">
+    Submit commitment to Merkle tree:
+    
+    ```typescript
+    const tx = await privacyCash.deposit({
+      amount: 1.0,
+      utxo: utxo,
+    });
+    
+    // Commitment added to tree at index 42
+    // Event emitted with encrypted UTXO
+    ```
+  </Step>
+  
+  <Step title="Wait for Anonymity">
+    Let other users deposit to increase anonymity set:
+    
+    ```typescript
+    // Best practice: wait hours or days
+    await new Promise(resolve => setTimeout(resolve, 24 * 60 * 60 * 1000));
+    ```
+  </Step>
+  
+  <Step title="Generate Merkle Proof">
+    Prove commitment is in tree:
+    
+    ```typescript
+    const proof = await merkleTree.generateProof(commitment);
+    // proof = { pathElements: [...], pathIndices: 42 }
+    ```
+  </Step>
+  
+  <Step title="Compute Nullifier">
+    Generate nullifier to spend commitment:
+    
+    ```typescript
+    // Done inside ZK circuit, but conceptually:
+    const signature = poseidon([privateKey, commitment, proof.pathIndices]);
+    const nullifier = poseidon([commitment, proof.pathIndices, signature]);
+    // e.g., 0x9f8e7d6c5b4a3210...
+    ```
+  </Step>
+  
+  <Step title="Withdraw">
+    Submit zero-knowledge proof with nullifier:
+    
+    ```typescript
+    const tx = await privacyCash.withdraw({
+      amount: 0.9975,  // 1 SOL - 0.25% fee
+      recipient: recipientAddress,
+      inputCommitments: [utxo],
+      outputCommitments: [],  // No change
+    });
+    
+    // Nullifier account created
+    // Commitment marked as spent (cannot reuse)
+    ```
+  </Step>
+</Steps>
+
+## Security Analysis
+
+<AccordionGroup>
+  <Accordion title="Commitment Hiding">
+    **Security:** Commitments reveal no information about UTXOs.
+    
+    **Proof:** Given commitment `c = Poseidon(amount, pubkey, blinding, mint)`, an attacker cannot determine any input without:
+    1. Breaking Poseidon pre-image resistance (~2^256 operations)
+    2. Brute forcing blinding space (~2^248 possibilities)
+    
+    **Attack vectors:**
+    - ❌ Brute force: Computationally infeasible
+    - ❌ Dictionary attack: Blinding adds randomness
+    - ❌ Timing attack: Constant-time hashing
+    - ✅ Side channel: Use constant-time crypto libraries
+    
+    **Best practice:** Use cryptographically secure randomness for blinding.
+  </Accordion>
+  
+  <Accordion title="Nullifier Privacy">
+    **Security:** Nullifiers don't reveal which commitment was spent.
+    
+    **Proof:** Given nullifier `n = Poseidon(c, path, signature)`, an attacker cannot:
+    1. Determine which commitment `c` was spent (no linkage)
+    2. Forge a valid nullifier without private key (signature required)
+    3. Link nullifier to commitment via Merkle path (path + signature hashed together)
+    
+    **Attack vectors:**
+    - ❌ Commitment → Nullifier: Requires private key (unknown)
+    - ❌ Nullifier → Commitment: Pre-image resistance (~2^256)
+    - ⚠️ Timing correlation: Same user withdraws shortly after depositing
+    
+    **Best practice:** Add delays between deposit and withdrawal.
+  </Accordion>
+  
+  <Accordion title="Double-Spend Prevention">
+    **Security:** Commitments cannot be spent twice.
+    
+    **Mechanism:**
+    1. Nullifiers are deterministic (same commitment → same nullifier)
+    2. Nullifier accounts are PDAs (same nullifier → same address)
+    3. Account init fails if exists (Solana runtime check)
+    4. Check happens before proof verification (fail fast)
+    
+    **Attack vectors:**
+    - ❌ Use different nullifier: Circuit enforces correct nullifier
+    - ❌ Different account seeds: Program enforces standard seeds
+    - ❌ Race condition: Solana provides transaction atomicity
+    - ❌ Replay attack: Nullifier accounts persist forever
+    
+    **Guarantee:** Impossible to double-spend even with infinite compute.
+  </Accordion>
+  
+  <Accordion title="Blinding Security">
+    **Security:** Random blinding prevents commitment linkage.
+    
+    **Why needed:** Without blinding, identical amounts have identical commitments:
+    ```typescript
+    // WITHOUT blinding (bad!)
+    c1 = Poseidon(1_SOL, pubkey, mint);  // 0xabc123...
+    c2 = Poseidon(1_SOL, pubkey, mint);  // 0xabc123... (same!)
+    
+    // WITH blinding (good!)
+    c1 = Poseidon(1_SOL, pubkey, random1, mint);  // 0xabc123...
+    c2 = Poseidon(1_SOL, pubkey, random2, mint);  // 0xdef456... (different!)
+    ```
+    
+    **Best practices:**
+    - Use cryptographically secure randomness (crypto.randomBytes)
+    - Never reuse blinding factors
+    - Blinding should be at least 248 bits of entropy
+  </Accordion>
+</AccordionGroup>
+
+## Common Patterns
+
+### Change Outputs
+
+When withdrawing less than the commitment amount, create a change output:
+
+```typescript
+// Deposit: 10 SOL
+const depositUTXO = {
+  amount: 10_000_000_000n,
+  pubkey: myPublicKey,
+  blinding: randomBytes(31),
+  mintAddress: NATIVE_MINT,
+};
+
+// Later: Withdraw 7 SOL, keep 3 SOL as change
+const withdrawTx = await privacyCash.withdraw({
+  inputCommitments: [depositUTXO],
+  outputCommitments: [
+    {
+      amount: 3_000_000_000n,  // Change output (stays in pool)
+      pubkey: myPublicKey,     // Still mine
+      blinding: randomBytes(31),
+    },
+  ],
+  recipient: recipientAddress,
+  externalAmount: -7_000_000_000n,  // Withdraw 7 SOL
+});
+```
+
+### Splitting Commitments
+
+Split large commitments into smaller denominations:
+
+```typescript
+// Start with 100 SOL commitment
+const largeUTXO = { amount: 100e9, pubkey, blinding: random(), mint };
+
+// Split into 10 × 10 SOL commitments
+for (let i = 0; i < 10; i++) {
+  await privacyCash.transact({
+    inputCommitments: i === 0 ? [largeUTXO] : [changeUTXO],
+    outputCommitments: [
+      { amount: 10e9, pubkey, blinding: random(), mint },  // 10 SOL
+      { amount: 90e9 - (i * 10e9), pubkey, blinding: random(), mint },  // Remaining
+    ],
+    externalAmount: 0,  // Internal transfer
+  });
+}
+
+// Now have 10 separate 10 SOL commitments (better privacy!)
+```
+
+### Multi-Commitment Withdrawals
+
+Combine multiple commitments in one withdrawal:
+
+```typescript
+// Have two commitments: 5 SOL and 7 SOL
+const utxo1 = { amount: 5e9, pubkey, blinding: random(), mint };
+const utxo2 = { amount: 7e9, pubkey, blinding: random(), mint };
+
+// Withdraw total: 12 SOL
+await privacyCash.withdraw({
+  inputCommitments: [utxo1, utxo2],
+  outputCommitments: [],  // No change
+  recipient: recipientAddress,
+  externalAmount: -12e9,  // Withdraw 12 SOL (minus fee)
+});
+```
+
+## Implementation Reference
+
+<CardGroup cols={2}>
+  <Card title="Commitment Circuit" icon="microchip" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/circuits/transaction.circom#L58">
+    **transaction.circom:58**
+    
+    Commitment computation in ZK circuit
+  </Card>
+  
+  <Card title="Nullifier Circuit" icon="ban" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/circuits/transaction.circom#L69">
+    **transaction.circom:69**
+    
+    Nullifier generation in ZK circuit
+  </Card>
+  
+  <Card title="Nullifier Accounts" icon="database" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/anchor/programs/zkcash/src/lib.rs#L602">
+    **lib.rs:602**
+    
+    On-chain nullifier account structure
+  </Card>
+  
+  <Card title="Signature Template" icon="signature" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/circuits/keypair.circom#L15">
+    **keypair.circom:15**
+    
+    Signature generation for nullifiers
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="How It Works" icon="circle-nodes" href="/concepts/how-it-works">
+    See how commitments and nullifiers fit into the full transaction flow
+  </Card>
+  
+  <Card title="Zero-Knowledge Proofs" icon="key" href="/concepts/zero-knowledge-proofs">
+    Learn how ZK proofs verify commitments without revealing them
+  </Card>
+  
+  <Card title="Merkle Trees" icon="sitemap" href="/concepts/merkle-trees">
+    Understand how commitments are stored and proven
+  </Card>
+  
+  <Card title="Build with SDK" icon="code" href="/quickstart">
+    Start creating commitments and generating nullifiers
+  </Card>
+</CardGroup>

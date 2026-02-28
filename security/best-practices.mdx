@@ -1,0 +1,308 @@
+---
+title: 'Security Best Practices'
+description: 'Guidelines for safely using Privacy Cash'
+---
+
+Follow these best practices to maximize your security and privacy when using Privacy Cash.
+
+## Transaction Security
+
+### Keep Your Secrets Safe
+
+<Warning>
+**Never share your note secrets**: Each deposit generates a secret note. Anyone with this secret can withdraw your funds. Treat it like a private key.
+</Warning>
+
+<CardGroup cols={2}>
+  <Card title="Store Secrets Offline" icon="vault">
+    Keep your note secrets in a secure, offline location. Hardware wallets or encrypted files are recommended.
+  </Card>
+  
+  <Card title="Use Multiple Notes" icon="layer-group">
+    Split large amounts across multiple deposits to reduce risk and improve privacy.
+  </Card>
+</CardGroup>
+
+### Verify Transaction Details
+
+<Info>
+Always verify transaction parameters before signing:
+- **Recipient address**: Ensure the withdrawal address is correct
+- **Amount**: Confirm deposit/withdrawal amounts match your intent
+- **Fees**: Check that fees are within expected ranges (0.25% for withdrawals)
+- **Token type**: Verify you're transacting with the correct SPL token
+</Info>
+
+## Privacy Best Practices
+
+### Timing and Anonymity Set
+
+<Card title="Wait Before Withdrawing" icon="clock">
+  For maximum privacy, wait for multiple other deposits before withdrawing. A larger anonymity set makes linking deposits to withdrawals more difficult.
+</Card>
+
+Recommendations:
+- **Minimum wait**: Wait for at least 10-20 other deposits in the same denomination
+- **Different amounts**: Avoid depositing and withdrawing the exact same amount
+- **Time variation**: Don't withdraw at predictable intervals
+
+### Network Privacy
+
+<CardGroup cols={2}>
+  <Card title="Use VPN or Tor" icon="shield">
+    Protect your IP address when interacting with the protocol to prevent network-level correlation.
+  </Card>
+  
+  <Card title="Different Wallets" icon="wallet">
+    Consider using separate wallets for deposits and withdrawals to enhance privacy.
+  </Card>
+</CardGroup>
+
+## Amount Management
+
+### Deposit Limits
+
+<Info>
+**Current Limits**:
+- **SOL**: Maximum 1,000 SOL per deposit
+- **SPL Tokens**: Limits vary by token (set by protocol authority)
+
+These limits protect against large-scale attacks and ensure system stability.
+
+Reference: `lib.rs:78`, `lib.rs:267-272`
+</Info>
+
+### Breaking Up Large Amounts
+
+For amounts exceeding deposit limits or for better privacy:
+
+1. **Split deposits**: Break large amounts into multiple smaller deposits
+2. **Use different denominations**: Vary the amounts to avoid patterns
+3. **Stagger timing**: Space out deposits over time
+4. **Mix tokens**: Consider using multiple token types if appropriate
+
+## Relayer Safety
+
+### Using Relayers for Withdrawals
+
+<Card title="Relayer Best Practices" icon="tower-broadcast">
+  Relayers enable withdrawals to fresh addresses without linking to your deposit wallet.
+</Card>
+
+When using relayers:
+
+<Warning>
+**Verify relayer fees**: Relayers charge a service fee on top of the protocol's 0.25% withdrawal fee. Check that the total fee is reasonable before proceeding.
+</Warning>
+
+- Use reputable relayers with transparent fee structures
+- Understand that relayers know the withdrawal address (but not the deposit)
+- Consider using multiple relayers for different withdrawals
+- Verify the relayer's smart contract is correctly implemented
+
+## Smart Contract Interaction
+
+### Verifying Program Deployment
+
+<Info>
+Before interacting with Privacy Cash, verify the on-chain program:
+
+**Program ID (Mainnet)**:
+```
+9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD
+```
+
+**Verified Hash**:
+```
+c6f1e5336f2068dc1c1e1c64e92e3d8495b8df79f78011e2620af60aa43090c5
+```
+
+Use Solana verification tools to ensure the deployed program matches the audited source code.
+</Info>
+
+### Approved Tokens Only
+
+<Card title="Token Allowlist" icon="list-check">
+  Only use approved SPL tokens listed in the protocol documentation.
+</Card>
+
+**Mainnet Approved Tokens**:
+- USDC (Circle)
+- USDT (Tether)
+- ORE
+- ZEC (Zcash)
+- stORE (Staked ORE)
+- jlUSDC (Jupiter LP USDC)
+- jlWSOL (Jupiter LP Wrapped SOL)
+
+Reference: `lib.rs:52-60`
+
+<Warning>
+Attempting to use non-approved tokens will result in transaction failure. The protocol enforces a strict allowlist for security.
+</Warning>
+
+## Fee Management
+
+### Understanding Fee Structure
+
+<CardGroup cols={2}>
+  <Card title="Deposits" icon="arrow-down">
+    **Free** - No protocol fees for deposits (0%)
+  </Card>
+  
+  <Card title="Withdrawals" icon="arrow-up">
+    **0.25%** - Standard withdrawal fee (25 basis points)
+  </Card>
+</CardGroup>
+
+Reference: `lib.rs:91-92`
+
+### Fee Error Margin
+
+The protocol allows a 5% error margin on fees to accommodate minor calculation differences:
+
+```
+Minimum acceptable fee = Expected fee × (1 - 5%)
+                      = Expected fee × 0.95
+```
+
+This prevents legitimate transactions from failing due to rounding errors while still protecting against fee manipulation.
+
+Reference: `lib.rs:93`, `utils.rs:148-212`
+
+## Operational Security
+
+### Wallet Security
+
+<CardGroup cols={2}>
+  <Card title="Hardware Wallets" icon="microchip">
+    Use hardware wallets for signing transactions when possible.
+  </Card>
+  
+  <Card title="Multi-Signature" icon="users">
+    For large amounts, consider using multi-signature wallets for deposits.
+  </Card>
+  
+  <Card title="Fresh Addresses" icon="plus">
+    Withdraw to fresh addresses that haven't been publicly linked to you.
+  </Card>
+  
+  <Card title="Regular Audits" icon="magnifying-glass">
+    Periodically review your notes and transactions for any anomalies.
+  </Card>
+</CardGroup>
+
+### Backup Your Data
+
+<Warning>
+**Critical**: Back up all transaction data, including:
+- Note secrets and commitments
+- Merkle tree paths
+- Transaction hashes
+- Encrypted output data
+
+Loss of this data means permanent loss of funds.
+</Warning>
+
+Backup recommendations:
+- Store encrypted backups in multiple secure locations
+- Use different encryption keys for different backups
+- Test recovery procedures periodically
+- Consider using secret-sharing schemes (e.g., Shamir's Secret Sharing)
+
+## Monitoring and Alerts
+
+### Track Your Transactions
+
+<Info>
+**Monitor these events**:
+- `CommitmentData`: Emitted when SOL deposits/withdrawals create new commitments
+- `SplCommitmentData`: Emitted for SPL token transactions
+
+These events help you track the state of the Merkle tree and verify your transactions were included.
+
+Reference: `lib.rs:351-361`, `lib.rs:505-517`
+</Info>
+
+### Merkle Root History
+
+The protocol maintains a history of 100 recent Merkle roots:
+
+- Transactions can reference any root from this history
+- Older roots are automatically pruned from the history
+- If your proof references a root outside the history window, the transaction will fail
+
+<Warning>
+**Time-sensitive withdrawals**: If you generate a proof but don't submit it for an extended period, the referenced root may be pruned from history. Always submit proofs promptly after generation.
+
+Reference: `merkle_tree.rs:79-105`, `lib.rs:80`
+</Warning>
+
+## Common Pitfalls to Avoid
+
+### Transaction Failures
+
+<CardGroup cols={2}>
+  <Card title="Double-Spend Attempts" icon="ban">
+    Using the same nullifier twice will cause automatic transaction failure.
+  </Card>
+  
+  <Card title="Invalid Proofs" icon="xmark">
+    Ensure your zero-knowledge proof is correctly generated for the current circuit.
+  </Card>
+  
+  <Card title="Unknown Roots" icon="question">
+    Verify your Merkle root is still in the 100-entry history before submitting.
+  </Card>
+  
+  <Card title="Insufficient Funds" icon="coins">
+    Ensure the pool has enough liquidity for your withdrawal plus fees.
+  </Card>
+</CardGroup>
+
+### Privacy Leaks
+
+Avoid these common privacy mistakes:
+
+1. **Same-amount patterns**: Don't deposit and withdraw identical amounts
+2. **Immediate withdrawals**: Wait for more deposits to increase anonymity set
+3. **Address reuse**: Don't withdraw to previously used addresses
+4. **Metadata correlation**: Use different timestamps, gas prices, and wallet addresses
+5. **Social correlation**: Don't discuss specific deposits/withdrawals publicly
+
+## Emergency Procedures
+
+### If You Lose Your Note Secret
+
+<Warning>
+**Funds are irrecoverable**: If you lose your note secret and have no backup, your funds cannot be recovered. There is no password reset or recovery mechanism.
+</Warning>
+
+### If You Suspect Compromise
+
+If you believe your note secret may be compromised:
+
+1. **Immediately withdraw**: If possible, withdraw to a new, secure address
+2. **Use a relayer**: Consider using a relayer to avoid exposing your IP
+3. **Monitor the chain**: Watch for unauthorized withdrawal attempts
+4. **Secure new funds**: Use different wallets and secrets for future deposits
+
+## Additional Resources
+
+<CardGroup cols={2}>
+  <Card title="Security Audits" icon="shield-check" href="/security/audits">
+    Review comprehensive security audits by multiple firms
+  </Card>
+  
+  <Card title="Safety Features" icon="lock" href="/security/safety-features">
+    Learn about built-in protocol security mechanisms
+  </Card>
+  
+  <Card title="GitHub Repository" icon="github" href="https://github.com/Privacy-Cash">
+    Examine the open-source code yourself
+  </Card>
+  
+  <Card title="SDK Documentation" icon="code" href="https://github.com/Privacy-Cash/privacy-cash-sdk">
+    Integrate Privacy Cash safely into your application
+  </Card>
+</CardGroup>

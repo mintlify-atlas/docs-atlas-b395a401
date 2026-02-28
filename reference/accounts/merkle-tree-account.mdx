@@ -1,0 +1,73 @@
+---
+title: MerkleTreeAccount
+description: The main account structure that stores the Merkle tree state for tracking private commitments
+---
+
+## Overview
+
+The `MerkleTreeAccount` is a zero-copy account that stores the sparse Merkle tree state used to track all private commitments in the Privacy Cash protocol. Each tree can handle either native SOL or a specific SPL token.
+
+## Account Structure
+
+<ResponseField name="authority" type="Pubkey" required>
+  The public key of the authority that can update this tree's configuration
+</ResponseField>
+
+<ResponseField name="next_index" type="u64" required>
+  The index where the next leaf will be inserted in the Merkle tree
+</ResponseField>
+
+<ResponseField name="subtrees" type="[[u8; 32]; 26]" required>
+  Array of intermediate node hashes representing the state of each level in the Merkle tree (height 26)
+</ResponseField>
+
+<ResponseField name="root" type="[u8; 32]" required>
+  The current root hash of the Merkle tree
+</ResponseField>
+
+<ResponseField name="root_history" type="[[u8; 32]; 100]" required>
+  Circular buffer storing the last 100 root hashes to allow proofs against recent tree states
+</ResponseField>
+
+<ResponseField name="root_index" type="u64" required>
+  The current position in the root_history circular buffer
+</ResponseField>
+
+<ResponseField name="max_deposit_amount" type="u64" required>
+  Maximum amount (in lamports for SOL, or token units for SPL tokens) that can be deposited in a single transaction
+</ResponseField>
+
+<ResponseField name="height" type="u8" required>
+  The height of the Merkle tree (fixed at 26)
+</ResponseField>
+
+<ResponseField name="root_history_size" type="u8" required>
+  The size of the root history buffer (fixed at 100)
+</ResponseField>
+
+<ResponseField name="bump" type="u8" required>
+  The PDA bump seed used for account derivation
+</ResponseField>
+
+<ResponseField name="_padding" type="[u8; 5]" required>
+  Padding bytes required for zero-copy account alignment
+</ResponseField>
+
+## PDA Seeds
+
+### For SOL (Native)
+```
+[b"merkle_tree"]
+```
+
+### For SPL Tokens
+```
+[b"merkle_tree", mint.key().as_ref()]
+```
+
+## Notes
+
+- This account uses the `#[account(zero_copy)]` attribute for efficient memory access without deserialization
+- The tree height of 26 allows for 2^26 (67,108,864) unique commitments
+- The root history enables users to create proofs using recent tree states even while new deposits are being processed
+- Each SPL token has its own separate Merkle tree account

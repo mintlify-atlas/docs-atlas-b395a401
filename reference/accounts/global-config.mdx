@@ -1,0 +1,58 @@
+---
+title: GlobalConfig
+description: Global configuration account for managing fee rates and protocol parameters
+---
+
+## Overview
+
+The `GlobalConfig` account stores protocol-wide settings including deposit and withdrawal fee rates. This account is used by both SOL and SPL token transactions.
+
+## Account Structure
+
+<ResponseField name="authority" type="Pubkey" required>
+  The public key of the authority that can update the global configuration
+</ResponseField>
+
+<ResponseField name="deposit_fee_rate" type="u16" required>
+  Deposit fee rate in basis points (0-10000, where 10000 = 100%). Default is 0 (free deposits)
+</ResponseField>
+
+<ResponseField name="withdrawal_fee_rate" type="u16" required>
+  Withdrawal fee rate in basis points (0-10000, where 10000 = 100%). Default is 25 (0.25%)
+</ResponseField>
+
+<ResponseField name="fee_error_margin" type="u16" required>
+  Acceptable fee error margin in basis points (0-10000, where 10000 = 100%). Default is 500 (5%). Allows fees to be slightly lower than expected to account for rounding
+</ResponseField>
+
+<ResponseField name="bump" type="u8" required>
+  The PDA bump seed used for account derivation
+</ResponseField>
+
+## PDA Seeds
+
+```
+[b"global_config"]
+```
+
+## Default Values
+
+- **deposit_fee_rate**: 0 (free deposits)
+- **withdrawal_fee_rate**: 25 basis points (0.25%)
+- **fee_error_margin**: 500 basis points (5%)
+
+## Fee Calculation
+
+Fees are calculated in basis points:
+- 1 basis point = 0.01%
+- 100 basis points = 1%
+- 10000 basis points = 100%
+
+For example, a withdrawal fee rate of 25 basis points means users pay 0.25% of the withdrawal amount as a fee.
+
+## Notes
+
+- This is a singleton account shared across all token types
+- Only the authority can update fee rates using the `update_global_config` instruction
+- The `fee_error_margin` prevents transaction failures due to minor rounding differences in fee calculations
+- For SPL token transfers, this account also serves as the signing authority for the tree's associated token accounts

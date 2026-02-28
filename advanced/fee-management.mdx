@@ -1,0 +1,203 @@
+---
+title: 'Fee Management'
+description: 'Configuration and management of transaction fees in Privacy Cash'
+---
+
+## Overview
+
+Privacy Cash implements a flexible fee system using basis points for precise fee calculations. The global configuration allows administrators to set different fee rates for deposits and withdrawals, along with an error margin for fee validation.
+
+## Fee Configuration Structure
+
+The `GlobalConfig` account stores all fee-related parameters:
+
+```rust
+pub struct GlobalConfig {
+    pub authority: Pubkey,
+    pub deposit_fee_rate: u16,    // basis points (0-10000)
+    pub withdrawal_fee_rate: u16, // basis points (0-10000)
+    pub fee_error_margin: u16,    // basis points (0-10000)
+    pub bump: u8,
+}
+```
+
+## Default Fee Rates
+
+When initializing the protocol, the following default values are set:
+
+- **Deposit Fee Rate**: `0` basis points (0% - Free deposits)
+- **Withdrawal Fee Rate**: `25` basis points (0.25%)
+- **Fee Error Margin**: `500` basis points (5%)
+
+These defaults are configured in `lib.rs:91-93` during the `initialize` function.
+
+## Basis Points System
+
+Fees are expressed in basis points where:
+- `1 basis point = 0.01%`
+- `100 basis points = 1%`
+- `10000 basis points = 100%`
+
+Valid range: `0-10000` basis points
+
+### Examples
+
+| Basis Points | Percentage | Description |
+|--------------|------------|-------------|
+| 0 | 0% | Free transactions |
+| 25 | 0.25% | Default withdrawal fee |
+| 100 | 1% | 1% fee |
+| 500 | 5% | Default error margin |
+| 1000 | 10% | 10% fee |
+| 10000 | 100% | Maximum allowed fee |
+
+## Fee Calculation
+
+### Deposit Fees
+
+For deposits (`ext_amount > 0`):
+
+```
+expected_fee = (ext_amount × deposit_fee_rate) / 10000
+minimum_fee = expected_fee × (1 - fee_error_margin/10000)
+```
+
+**Example**: 1000 SOL deposit with 25 basis point fee rate and 500 basis point error margin:
+- Expected fee: `(1000 × 25) / 10000 = 2.5` (rounded down to 2)
+- Minimum acceptable fee: `2 × (1 - 500/10000) = 2 × 0.95 = 1.9` (rounded down to 1)
+
+### Withdrawal Fees
+
+For withdrawals (`ext_amount < 0`):
+
+```
+expected_fee = (|ext_amount| × withdrawal_fee_rate) / 10000
+minimum_fee = expected_fee × (1 - fee_error_margin/10000)
+```
+
+**Example**: 1000 SOL withdrawal with 25 basis point fee rate and 500 basis point error margin:
+- Expected fee: `(1000 × 25) / 10000 = 2.5` (rounded down to 2)
+- Minimum acceptable fee: `2 × (1 - 500/10000) = 2 × 0.95 = 1.9` (rounded down to 1)
+
+## Fee Error Margin
+
+The fee error margin provides flexibility in fee calculations to account for:
+- Price fluctuations between fee calculation and transaction execution
+- Rounding differences
+- Relayer profit margins
+
+The default 5% margin allows fees to be within 95-105% of the expected fee amount.
+
+## Updating Fee Configuration
+
+Only the protocol authority can update fee rates using the `update_global_config` instruction.
+
+### Function Signature
+
+```rust
+pub fn update_global_config(
+    ctx: Context<UpdateGlobalConfig>, 
+    deposit_fee_rate: Option<u16>,
+    withdrawal_fee_rate: Option<u16>,
+    fee_error_margin: Option<u16>
+) -> Result<()>
+```
+
+### Parameters
+
+- `deposit_fee_rate` (optional): New deposit fee rate in basis points (0-10000)
+- `withdrawal_fee_rate` (optional): New withdrawal fee rate in basis points (0-10000)
+- `fee_error_margin` (optional): New fee error margin in basis points (0-10000)
+
+### Validation
+
+All fee rates must satisfy:
+```rust
+fee_rate <= 10000  // Maximum 100%
+```
+
+Attempting to set a fee rate above 10000 will result in an `InvalidFeeRate` error.
+
+## Fee Validation
+
+The `validate_fee` function (`utils.rs:148-212`) ensures that provided fees meet minimum requirements:
+
+### Validation Logic
+
+1. **For deposits** (`ext_amount > 0`):
+   - Calculate expected fee using `deposit_fee_rate`
+   - Apply `fee_error_margin` to get minimum acceptable fee
+   - Verify `provided_fee >= minimum_acceptable_fee`
+
+2. **For withdrawals** (`ext_amount < 0`):
+   - Calculate expected fee using `withdrawal_fee_rate`
+   - Apply `fee_error_margin` to get minimum acceptable fee
+   - Verify `provided_fee >= minimum_acceptable_fee`
+
+3. **For zero amounts** (`ext_amount == 0`):
+   - No fee validation required
+
+### Error Handling
+
+If fee validation fails, the transaction reverts with `ErrorCode::InvalidFeeAmount`:
+
+> "Fee amount is below minimum required (must be at least (1 - fee_error_margin) * expected_fee)"
+
+## Fee Distribution
+
+Fees are distributed to the fee recipient specified in the transaction:
+
+### SOL Transactions
+
+Fees are transferred from the tree token account to the fee recipient account using lamports transfer (`lib.rs:318-342`).
+
+### SPL Token Transactions
+
+Fees are transferred from the tree's associated token account to the fee recipient's associated token account (`lib.rs:478-496`).
+
+## Special Cases
+
+### Zero Expected Fee
+
+When the expected fee calculates to 0 (e.g., small amounts with low fee rates):
+- Minimum acceptable fee is also 0
+- Any fee amount >= 0 is acceptable
+
+### Free Deposits
+
+With the default `deposit_fee_rate` of 0:
+- Expected deposit fee: 0
+- Minimum acceptable fee: 0
+- Users can deposit without paying fees
+
+### Arithmetic Overflow Protection
+
+All fee calculations include overflow protection:
+- Uses `checked_mul` and `checked_div` operations
+- Returns `ErrorCode::ArithmeticOverflow` on overflow
+- Prevents integer overflow attacks
+
+## Best Practices
+
+### For Administrators
+
+1. **Set reasonable fee rates**: Balance protocol sustainability with user experience
+2. **Use appropriate error margins**: Default 5% works for most cases
+3. **Test fee changes**: Verify calculations before deploying rate changes
+4. **Monitor fee revenue**: Track fee collection for protocol economics
+
+### For Developers
+
+1. **Calculate fees client-side**: Pre-calculate expected fees to prevent transaction failures
+2. **Include error margin**: Add buffer to account for margin requirements
+3. **Handle rounding**: Use integer division, rounding down for fee calculations
+4. **Test edge cases**: Verify behavior with small amounts and high fee rates
+
+## Code References
+
+- GlobalConfig structure: `lib.rs:881-887`
+- Fee initialization: `lib.rs:88-94`
+- Fee validation: `utils.rs:148-212`
+- Update configuration: `lib.rs:117-144`
+- Fee transfer (SOL): `lib.rs:318-342`
+- Fee transfer (SPL): `lib.rs:478-496`

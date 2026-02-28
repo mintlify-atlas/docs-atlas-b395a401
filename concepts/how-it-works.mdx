@@ -1,0 +1,291 @@
+---
+title: 'How It Works'
+description: 'Understand the complete Privacy Cash transaction flow from deposits to withdrawals'
+icon: 'circle-nodes'
+---
+
+## Overview
+
+Privacy Cash enables private transactions on Solana by breaking the on-chain link between deposits and withdrawals. Users deposit SOL or SPL tokens into a shared pool, creating commitments that are stored in a Merkle tree. When withdrawing, they prove ownership of a commitment using zero-knowledge proofs without revealing which specific commitment they own.
+
+## Transaction Flow
+
+<Steps>
+  <Step title="Deposit (Shielding)">
+    Users deposit funds into the privacy pool, generating a secret commitment that represents their deposit.
+    
+    When you deposit:
+    1. Generate a random private key and blinding factor
+    2. Create a UTXO (Unspent Transaction Output) containing:
+       - Amount
+       - Public key (derived from private key)
+       - Blinding factor
+       - Mint address (token type)
+    3. Compute commitment: `hash(amount, publicKey, blinding, mintAddress)`
+    4. Submit transaction with the commitment
+    5. Commitment is added to the on-chain Merkle tree
+    
+    The commitment is publicly visible, but the underlying details (amount, owner) remain encrypted.
+  </Step>
+  
+  <Step title="Privacy Pool Storage">
+    All commitments are stored in a Merkle tree on-chain, creating a growing anonymity set.
+    
+    The Merkle tree:
+    - Height: 26 levels
+    - Maximum capacity: 67,108,864 leaves (2^26)
+    - Root history: 100 most recent roots
+    - Hash function: Poseidon (ZK-friendly)
+    
+    Each new commitment increases the anonymity set, making it harder to link deposits to withdrawals.
+  </Step>
+  
+  <Step title="Withdrawal (Unshielding)">
+    Users withdraw funds by proving they own a commitment in the tree without revealing which one.
+    
+    When you withdraw:
+    1. Select input commitments to spend
+    2. Generate a Merkle proof showing the commitment exists in the tree
+    3. Create a nullifier to prevent double-spending
+    4. Generate output commitments for change or recipients
+    5. Create a zero-knowledge proof that proves:
+       - You know the private key for the input commitment
+       - The commitment exists in the Merkle tree
+       - The nullifier is correctly computed
+       - Input amounts equal output amounts (plus fees)
+    6. Submit the proof and nullifiers to the program
+    
+    The recipient address can be different from the depositor, breaking the on-chain link.
+  </Step>
+  
+  <Step title="Nullifier Check">
+    The program verifies the proof and checks that nullifiers haven't been used before.
+    
+    Verification steps:
+    1. Verify the Merkle root exists in root history (confirms commitment was in tree at some point)
+    2. Check that nullifiers haven't been used (prevents double-spending)
+    3. Verify the zero-knowledge proof using Groth16
+    4. Verify the external data hash matches (recipient, amount, fees)
+    5. Execute the transfer if all checks pass
+    
+    Once a nullifier is used, the commitment is "spent" and cannot be reused.
+  </Step>
+</Steps>
+
+## Universal JoinSplit Transactions
+
+Privacy Cash implements universal JoinSplit transactions, supporting flexible transaction types:
+
+<CardGroup cols={2}>
+  <Card title="Deposits" icon="arrow-down">
+    **Shield funds** by creating new commitments
+    - Transfer SOL/tokens from wallet to privacy pool
+    - Generate 2 output commitments (for amount splitting)
+    - External amount is positive
+    - Subject to deposit limits (configurable per token)
+  </Card>
+  
+  <Card title="Withdrawals" icon="arrow-up">
+    **Unshield funds** by spending commitments
+    - Transfer from privacy pool to any recipient
+    - Consume up to 2 input commitments
+    - External amount is negative
+    - No withdrawal limits
+  </Card>
+  
+  <Card title="Transfers" icon="arrow-right-arrow-left">
+    **Internal transfers** between commitments
+    - Spend old commitments, create new ones
+    - External amount is zero
+    - Stay within the privacy pool
+    - Refresh commitments for enhanced privacy
+  </Card>
+  
+  <Card title="Splitting/Merging" icon="code-merge">
+    **Reorganize amounts** within the pool
+    - Split large commitment into smaller ones
+    - Merge multiple commitments into one
+    - Useful for making exact-amount withdrawals
+  </Card>
+</CardGroup>
+
+## UTXO Model
+
+Privacy Cash uses a UTXO (Unspent Transaction Output) model similar to Bitcoin, adapted for zero-knowledge proofs:
+
+```typescript UTXO Structure
+{
+  amount: u64,           // Amount of SOL or tokens
+  pubkey: Field,         // Public key (derived from private key)
+  blinding: Field,       // Random blinding factor for uniqueness
+  mintAddress: Pubkey    // Token type (SOL or SPL token mint)
+}
+```
+
+Each transaction:
+- Consumes up to **2 input UTXOs** (must be in Merkle tree)
+- Creates exactly **2 output UTXOs** (added to Merkle tree)
+- Input amounts must equal output amounts (accounting for external transfers and fees)
+
+<Note>
+The circuit enforces the amount invariant: `sum(inputs) + publicAmount = sum(outputs)`
+
+Where `publicAmount = extAmount - fee`
+</Note>
+
+## Multi-Token Support
+
+Privacy Cash maintains separate Merkle trees for different token types:
+
+<Tabs>
+  <Tab title="SOL">
+    Native SOL uses a dedicated Merkle tree with PDA seeds `["merkle_tree"]`.
+    
+    - Mint address: `11111111111111111111111111111112`
+    - Default deposit limit: 1,000 SOL
+    - Deposit fee: 0% (free)
+    - Withdrawal fee: 0.25%
+  </Tab>
+  
+  <Tab title="SPL Tokens">
+    Each SPL token gets its own Merkle tree with PDA seeds `["merkle_tree", mint]`.
+    
+    Supported tokens include:
+    - USDC, USDT (stablecoins)
+    - ORE, stORE (ORE ecosystem)
+    - ZEC (privacy token)
+    - jlUSDC, jlWSOL (Jupiter LM)
+    
+    <Info>
+    SPL token trees must be initialized by the authority before use. Deposit limits are configurable per token.
+    </Info>
+  </Tab>
+</Tabs>
+
+## Fee Structure
+
+Privacy Cash uses a transparent fee model:
+
+| Operation | Fee Rate | Adjustable |
+|-----------|----------|------------|
+| Deposits | 0% (free) | ✅ Yes |
+| Withdrawals | 0.25% (25 basis points) | ✅ Yes |
+| Internal transfers | 0% | - |
+
+<Note>
+Fees include a 5% error margin (configurable). Relayers can charge slightly more to cover gas costs and slippage.
+</Note>
+
+**Fee validation formula:**
+```
+minimum_acceptable_fee = expected_fee × (1 - fee_error_margin)
+```
+
+Where:
+- `expected_fee = amount × fee_rate / 10000` (for deposits/withdrawals)
+- `fee_error_margin = 500` (5% tolerance)
+
+## Security Properties
+
+<AccordionGroup>
+  <Accordion title="Transaction Privacy">
+    Deposits and withdrawals cannot be linked unless:
+    - The anonymity set is too small (< 10 users)
+    - Timing correlation is possible (only user in time window)
+    - Amount correlation exists (unique amount)
+    
+    **Best practices:**
+    - Wait between deposit and withdrawal
+    - Use common amounts (0.1, 1, 10 SOL)
+    - Split large amounts across multiple commitments
+  </Accordion>
+  
+  <Accordion title="Double-Spend Prevention">
+    Nullifiers prevent the same commitment from being spent twice.
+    
+    The program:
+    1. Creates nullifier account on first spend (PDA: `["nullifier0", nullifier]`)
+    2. Transaction fails if nullifier account already exists
+    3. Checks both nullifiers in 2-input transactions
+    4. Prevents nullifier collisions between input slots
+    
+    This is enforced at the Solana runtime level before proof verification.
+  </Accordion>
+  
+  <Accordion title="Amount Integrity">
+    The zero-knowledge circuit enforces that:
+    - Input amounts equal output amounts (conservation of value)
+    - Output amounts fit in 248 bits (prevents overflow)
+    - Public amount correctly accounts for external transfers and fees
+    - All commitments are computed correctly
+    
+    The program additionally verifies:
+    - External amounts don't exceed deposit limits
+    - Fees meet minimum requirements
+    - Pool has sufficient balance for withdrawals
+  </Accordion>
+  
+  <Accordion title="Proof Soundness">
+    Groth16 proofs ensure computational integrity:
+    - Prover cannot forge proofs for invalid statements
+    - Proof verification is deterministic
+    - Verifying key is hardcoded in program (no substitution attacks)
+    - Public inputs are bound to the proof
+    
+    The circuit has been audited by:
+    - Accretion
+    - HashCloak
+    - Zigtur
+    - Kriko
+  </Accordion>
+</AccordionGroup>
+
+## Implementation Reference
+
+Key files in the source code:
+
+<CardGroup cols={2}>
+  <Card title="Transaction Circuit" icon="microchip" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/circuits/transaction.circom">
+    **circuits/transaction.circom:22**
+    
+    Universal JoinSplit circuit with 2 inputs and 2 outputs
+  </Card>
+  
+  <Card title="Transact Instruction" icon="code" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/anchor/programs/zkcash/src/lib.rs#L213">
+    **lib.rs:213**
+    
+    Main instruction for SOL deposits and withdrawals
+  </Card>
+  
+  <Card title="Merkle Tree" icon="sitemap" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/anchor/programs/zkcash/src/merkle_tree.rs">
+    **merkle_tree.rs**
+    
+    On-chain Merkle tree implementation
+  </Card>
+  
+  <Card title="Proof Verification" icon="shield-check" href="https://github.com/Privacy-Cash/privacy-cash/blob/main/anchor/programs/zkcash/src/utils.rs#L214">
+    **utils.rs:214**
+    
+    Groth16 proof verification logic
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Privacy Model" icon="eye-slash" href="/concepts/privacy-model">
+    Learn about the privacy guarantees and threat model
+  </Card>
+  
+  <Card title="Zero-Knowledge Proofs" icon="key" href="/concepts/zero-knowledge-proofs">
+    Understand the cryptographic proofs that power Privacy Cash
+  </Card>
+  
+  <Card title="Commitments & Nullifiers" icon="fingerprint" href="/concepts/commitments-and-nullifiers">
+    Deep dive into the core cryptographic primitives
+  </Card>
+  
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Start building with Privacy Cash SDK
+  </Card>
+</CardGroup>

@@ -1,0 +1,293 @@
+---
+title: 'Safety Features'
+description: 'Built-in security mechanisms protecting user funds and privacy'
+---
+
+Privacy Cash implements multiple layers of security to protect user funds and ensure transaction privacy.
+
+## Core Security Mechanisms
+
+### Double-Spend Protection
+
+<Card title="Nullifier Validation" icon="ban">
+  Every transaction creates unique nullifiers that prevent the same UTXO from being spent twice.
+</Card>
+
+The protocol uses a nullifier account system that automatically prevents double-spending:
+
+```rust
+// From lib.rs:602-622
+#[account(
+    init,
+    payer = signer,
+    space = 8 + std::mem::size_of::<NullifierAccount>(),
+    seeds = [b"nullifier0", proof.input_nullifiers[0].as_ref()],
+    bump
+)]
+pub nullifier0: Account<'info, NullifierAccount>,
+```
+
+<Info>
+**How it works**: Each input note generates a nullifier. The protocol attempts to create a nullifier account using `init` (not `init_if_needed`). If the nullifier already exists, the transaction automatically fails with a system error, preventing double-spends.
+
+Reference: `lib.rs:598-622`, `lib.rs:674-710`
+</Info>
+
+### Zero-Knowledge Proof Verification
+
+<Card title="Groth16 ZK-SNARK" icon="lock">
+  Every transaction requires a valid zero-knowledge proof using the Groth16 proving system.
+</Card>
+
+```rust
+// From lib.rs:260
+require!(verify_proof(proof.clone(), VERIFYING_KEY), ErrorCode::InvalidProof);
+```
+
+The verification process ensures:
+- Valid proof structure (lib.rs:226-233)
+- Correct public inputs (groth16.rs:89-109)
+- Pairing equation verification (groth16.rs:127-146)
+- Field element bounds checking (groth16.rs:149-152)
+
+### Merkle Root Validation
+
+<Card title="Historical Root Checking" icon="tree">
+  Transactions must reference a known historical Merkle tree root.
+</Card>
+
+```rust
+// From lib.rs:221-224
+require!(
+    MerkleTree::is_known_root(&tree_account, proof.root),
+    ErrorCode::UnknownRoot
+);
+```
+
+The system maintains a rolling history of 100 recent roots, allowing transactions to be constructed offline while preventing attacks using invalid tree states.
+
+Reference: `merkle_tree.rs:79-105`
+
+## Financial Safety Features
+
+### Deposit Limits
+
+<Card title="Configurable Deposit Caps" icon="gauge-high">
+  Maximum deposit amounts protect against large-scale attacks and ensure system stability.
+</Card>
+
+```rust
+// From lib.rs:267-272
+let deposit_amount = ext_amount as u64;
+require!(
+    deposit_amount <= tree_account.max_deposit_amount,
+    ErrorCode::DepositLimitExceeded
+);
+```
+
+- **Default limit**: 1,000 SOL (1,000,000,000,000 lamports)
+- **Authority-controlled**: Only the program authority can update limits
+- **Per-token limits**: Separate limits for SOL and each SPL token
+
+Reference: `lib.rs:78`, `lib.rs:105-112`, `lib.rs:191-206`
+
+### Fee Validation
+
+<Card title="Dynamic Fee Verification" icon="calculator">
+  Fees are validated against configurable rates with error margins.
+</Card>
+
+```rust
+// From utils.rs:148-212
+pub fn validate_fee(
+    ext_amount: i64,
+    provided_fee: u64,
+    deposit_fee_rate: u16,
+    withdrawal_fee_rate: u16,
+    fee_error_margin: u16,
+) -> Result<()>
+```
+
+**Fee Configuration**:
+- Deposit fee rate: 0% (free deposits)
+- Withdrawal fee rate: 0.25% (25 basis points)
+- Error margin: 5% (500 basis points)
+- All rates enforced within 0-10000 basis points
+
+Reference: `lib.rs:91-93`, `lib.rs:250-257`, `utils.rs:148-212`
+
+### Public Amount Verification
+
+<Card title="Amount Consistency Checks" icon="equals">
+  The relationship between deposit/withdrawal amounts and fees is cryptographically verified.
+</Card>
+
+```rust
+// From lib.rs:242-245
+require!(
+    utils::check_public_amount(ext_data.ext_amount, ext_data.fee, proof.public_amount),
+    ErrorCode::InvalidPublicAmountData
+);
+```
+
+This ensures:
+- Public amount = ext_amount - fee (for deposits)
+- Public amount = -(|ext_amount| + fee) (for withdrawals)
+- Prevents fee manipulation attacks
+
+Reference: `utils.rs:92-128`
+
+## Data Integrity Features
+
+### External Data Hash Verification
+
+<Card title="Transaction Data Binding" icon="fingerprint">
+  All transaction metadata is cryptographically bound to the zero-knowledge proof.
+</Card>
+
+```rust
+// From lib.rs:226-240
+let calculated_ext_data_hash = utils::calculate_complete_ext_data_hash(
+    ext_data.recipient,
+    ext_data.ext_amount,
+    &encrypted_output1,
+    &encrypted_output2,
+    ext_data.fee,
+    ext_data.fee_recipient,
+    ext_data.mint_address,
+)?;
+
+require!(
+    Fr::from_le_bytes_mod_order(&calculated_ext_data_hash) == 
+    Fr::from_be_bytes_mod_order(&proof.ext_data_hash),
+    ErrorCode::ExtDataHashMismatch
+);
+```
+
+This binds the proof to:
+- Recipient address
+- Transfer amount
+- Encrypted outputs (privacy data)
+- Fee and fee recipient
+- Token mint address
+
+Reference: `lib.rs:217-240`, `utils.rs:276-311`
+
+### Token Account Validation
+
+<Card title="SPL Token Account Checks" icon="coins">
+  SPL token operations validate account ownership and mint addresses.
+</Card>
+
+```rust
+// From lib.rs:375-383
+require!(
+    ctx.accounts.signer_token_account.owner == ctx.accounts.signer.key(),
+    ErrorCode::InvalidTokenAccount
+);
+require!(
+    ctx.accounts.signer_token_account.mint == ctx.accounts.mint.key(),
+    ErrorCode::InvalidTokenAccountMintAddress
+);
+```
+
+Reference: `lib.rs:375-397`
+
+## Arithmetic Safety
+
+### Overflow Protection
+
+<Card title="Checked Math Operations" icon="shield-halved">
+  All arithmetic operations use checked math to prevent overflows and underflows.
+</Card>
+
+Examples throughout the codebase:
+
+```rust
+// From lib.rs:290-299
+let ext_amount_abs: u64 = ext_amount.checked_neg()
+    .ok_or(ErrorCode::ArithmeticOverflow)?
+    .try_into()
+    .map_err(|_| ErrorCode::InvalidExtAmount)?;
+
+let total_required = ext_amount_abs
+    .checked_add(fee)
+    .ok_or(ErrorCode::ArithmeticOverflow)?;
+```
+
+Reference: `lib.rs:290-349`, `merkle_tree.rs:67-68`
+
+### Merkle Tree Capacity
+
+<Card title="Tree Full Protection" icon="database">
+  The Merkle tree has a maximum capacity of 2^26 (67,108,864) leaves.
+</Card>
+
+```rust
+// From merkle_tree.rs:33-39
+let max_capacity = 1u64 << height; // 2^height
+require!(
+    tree_account.next_index < max_capacity,
+    ErrorCode::MerkleTreeFull
+);
+```
+
+Reference: `merkle_tree.rs:33-39`, `lib.rs:23`
+
+## Access Control
+
+### Authority-Gated Operations
+
+<Card title="Administrative Controls" icon="key">
+  Critical operations require valid authority signatures.
+</Card>
+
+Protected operations:
+- **Initialize trees**: Create new Merkle trees for tokens (lib.rs:151-185)
+- **Update deposit limits**: Modify maximum deposit amounts (lib.rs:105-112)
+- **Update fee configuration**: Change fee rates and margins (lib.rs:117-143)
+
+```rust
+// From lib.rs:69-71
+if let Some(admin_key) = ADMIN_PUBKEY {
+    require!(ctx.accounts.authority.key().eq(&admin_key), ErrorCode::Unauthorized);
+}
+```
+
+**Authority Addresses**:
+- **Mainnet**: `AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM` (multisig)
+- **Devnet**: `97rSMQUukMDjA7PYErccyx7ZxbHvSDaeXp2ig5BwSrTf`
+- **Localnet**: No authority required (testing)
+
+Reference: `lib.rs:25-32`, `lib.rs:804-829`
+
+### Token Allowlist
+
+<Card title="Approved Tokens Only" icon="list-check">
+  Only explicitly approved SPL tokens can use the privacy protocol.
+</Card>
+
+```rust
+// From lib.rs:160-163
+require!(
+    ALLOW_ALL_SPL_TOKENS || ALLOWED_TOKENS.contains(&ctx.accounts.mint.key()),
+    ErrorCode::InvalidMintAddress
+);
+```
+
+**Mainnet Allowed Tokens**:
+- USDC: `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+- USDT: `Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB`
+- ORE: `oreoU2P8bN6jkk3jbaiVxYnG1dCXcYxwhwyK9jSybcp`
+- ZEC: `A7bdiYdS5GjqGFtxf17ppRHtDKPkkRqbKtR27dxvQXaS`
+- stORE: `sTorERYB6xAZ1SSbwpK3zoK2EEwbBrc7TZAzg1uCGiH`
+- jlUSDC: `9BEcn9aPEmhSPbPQeFGjidRiEKki46fVQDyPpSQXPA2D`
+- jlWSOL: `2uQsyo1fXXQkDtcpXnLofWy88PxcvnfH2L8FPSE62FVU`
+
+Reference: `lib.rs:40-60`, `lib.rs:394-397`
+
+<Warning>
+**Reentrancy Protection**: The nullifier validation mechanism provides automatic reentrancy protection. Since nullifiers must be created before any funds transfer, and creation fails if they already exist, the same transaction cannot be replayed within the same block or across blocks.
+
+Reference: `lib.rs:212`, `lib.rs:369`
+</Warning>

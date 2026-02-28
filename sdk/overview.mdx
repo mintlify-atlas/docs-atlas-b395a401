@@ -1,0 +1,124 @@
+---
+title: 'SDK Overview'
+description: 'Privacy Cash SDK for private transactions on Solana'
+icon: 'cube'
+---
+
+## Introduction
+
+The Privacy Cash SDK provides a TypeScript/JavaScript interface to integrate private transactions into your Solana applications. Built on zero-knowledge proofs, the SDK enables users to shield and withdraw SOL and SPL tokens privately, breaking on-chain transaction links.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Private Transfers" icon="shield">
+    Shield SOL and SPL tokens into privacy pools using zero-knowledge commitments
+  </Card>
+  <Card title="Zero-Knowledge Proofs" icon="lock">
+    Generate Groth16 proofs for unlinkable withdrawals
+  </Card>
+  <Card title="UTXO Model" icon="coins">
+    Manage private balances with a familiar UTXO-based approach
+  </Card>
+  <Card title="Merkle Trees" icon="tree">
+    Track commitments using efficient sparse Merkle trees
+  </Card>
+</CardGroup>
+
+## Architecture Overview
+
+The SDK implements a privacy protocol with the following components:
+
+### UTXO Management
+
+The SDK uses a UTXO (Unspent Transaction Output) model inspired by Tornado Cash Nova. Each UTXO contains:
+
+- **Amount**: The value of the UTXO
+- **Keypair**: A Poseidon-based keypair (not standard Ed25519)
+  - Private key: Random 31-byte value
+  - Public key: `PoseidonHash(privateKey)`
+- **Blinding Factor**: Random value for commitment hiding
+- **Mint Address**: Token mint (SOL or SPL token)
+- **Index**: Position in the Merkle tree
+
+### Commitment Scheme
+
+Commitments are calculated using Poseidon hash:
+
+```typescript
+commitment = PoseidonHash(amount, pubkey, blinding, mintAddress)
+```
+
+Commitments are inserted into a Merkle tree maintained by the on-chain program.
+
+### Nullifier Generation
+
+Nullifiers prevent double-spending by marking UTXOs as spent:
+
+```typescript
+signature = PoseidonSign(privateKey, commitment, index)
+nullifier = PoseidonHash(commitment, index, signature)
+```
+
+### Zero-Knowledge Proofs
+
+The SDK generates Groth16 proofs that verify:
+
+1. **Merkle proof**: UTXO exists in the commitment tree
+2. **Nullifier validity**: Prover knows the private key
+3. **Balance conservation**: Input amounts equal output amounts plus fees
+4. **External data binding**: Transaction metadata is correctly committed
+
+## Transaction Flow
+
+<Steps>
+  <Step title="Shield (Deposit)">
+    Create UTXOs with encrypted outputs and insert commitments into the Merkle tree. Users send tokens to the program's token account.
+  </Step>
+  <Step title="Transfer (Optional)">
+    Generate proofs to spend input UTXOs and create new output UTXOs, all within the privacy pool.
+  </Step>
+  <Step title="Withdraw">
+    Prove ownership of UTXOs and withdraw to any recipient address without revealing the deposit source.
+  </Step>
+</Steps>
+
+## Fee Structure
+
+- **Deposit Fee**: 0% (Free deposits)
+- **Withdrawal Fee**: 0.35% of withdrawal amount
+- **Fee Recipient**: `AWexibGxNFKTa1b5R5MN4PJr9HWnWRwf8EW9g8cLx3dM`
+
+## Security Considerations
+
+<Warning>
+  The SDK uses cryptographic primitives that require careful handling:
+  
+  - **Keep private keys secure**: UTXO keypairs control access to funds
+  - **Store encrypted outputs**: Needed to reconstruct UTXOs for spending
+  - **Verify Merkle roots**: Ensure roots exist in the program's history
+  - **Use sufficient anonymity sets**: Wait for more deposits before withdrawing
+</Warning>
+
+## Supported Networks
+
+- **Mainnet**: `9fhQBbumKEFuXtMBDw8AaQyAjCorLGJQiS3skWZdQyQD`
+- **Devnet**: Available for testing
+- **Localnet**: Supported for development
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/sdk/installation">
+    Install and configure the Privacy Cash SDK
+  </Card>
+  <Card title="Basic Usage" icon="code" href="/sdk/basic-usage">
+    Learn the core SDK operations
+  </Card>
+  <Card title="Examples" icon="book" href="/sdk/examples">
+    Explore complete integration examples
+  </Card>
+  <Card title="API Reference" icon="brackets-curly" href="/api-reference/introduction">
+    Browse the full API documentation
+  </Card>
+</CardGroup>

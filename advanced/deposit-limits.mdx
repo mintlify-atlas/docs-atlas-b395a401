@@ -1,0 +1,450 @@
+---
+title: 'Deposit Limits'
+description: 'Understanding and managing deposit limits in Privacy Cash'
+---
+
+## Overview
+
+Privacy Cash implements configurable deposit limits to manage risk and ensure protocol stability. Each Merkle tree (SOL and individual SPL tokens) can have its own maximum deposit amount that users cannot exceed in a single transaction.
+
+## Deposit Limit Structure
+
+Deposit limits are stored in the `MerkleTreeAccount` structure:
+
+```rust
+#[account(zero_copy)]
+pub struct MerkleTreeAccount {
+    pub authority: Pubkey,
+    pub next_index: u64,
+    pub subtrees: [[u8; 32]; MERKLE_TREE_HEIGHT as usize],
+    pub root: [u8; 32],
+    pub root_history: [[u8; 32]; 100],
+    pub root_index: u64,
+    pub max_deposit_amount: u64,  // Deposit limit in lamports or token units
+    pub height: u8,
+    pub root_history_size: u8,
+    pub bump: u8,
+    pub _padding: [u8; 5],
+}
+```
+
+**Code Reference**: `lib.rs:896-910`
+
+## Default Deposit Limits
+
+### SOL Tree
+
+The default SOL tree is initialized with:
+
+```rust
+tree_account.max_deposit_amount = 1_000_000_000_000; // 1000 SOL
+```
+
+**Amount**: 1,000 SOL (1,000,000,000,000 lamports)
+
+**Code Reference**: `lib.rs:78`
+
+### SPL Token Trees
+
+For SPL tokens, the deposit limit is configurable during tree initialization:
+
+```rust
+pub fn initialize_tree_account_for_spl_token(
+    ctx: Context<InitializeTreeAccountForSplToken>,
+    max_deposit_amount: u64  // Specified by authority
+) -> Result<()>
+```
+
+The authority can set appropriate limits based on:
+- Token decimals
+- Token value
+- Liquidity considerations
+- Risk management requirements
+
+**Code Reference**: `lib.rs:151-154`
+
+## Deposit Limit Enforcement
+
+Deposit limits are enforced during transaction processing:
+
+### SOL Deposits
+
+```rust
+if ext_amount > 0 {
+    // Check deposit limit for deposits
+    let deposit_amount = ext_amount as u64;
+    require!(
+        deposit_amount <= tree_account.max_deposit_amount,
+        ErrorCode::DepositLimitExceeded
+    );
+    // ... process deposit ...
+}
+```
+
+**Code Reference**: `lib.rs:266-273`
+
+### SPL Token Deposits
+
+```rust
+if ext_amount > 0 {
+    // Check deposit limit for deposits
+    let deposit_amount = ext_amount as u64;
+    require!(
+        deposit_amount <= tree_account.max_deposit_amount,
+        ErrorCode::DepositLimitExceeded
+    );
+    // ... process deposit ...
+}
+```
+
+**Code Reference**: `lib.rs:434-441`
+
+### Error Handling
+
+If a deposit exceeds the limit, the transaction reverts with:
+
+```
+ErrorCode::DepositLimitExceeded
+```
+
+Error message:
+> "Deposit limit exceeded"
+
+**Code Reference**: `lib.rs:936-937`
+
+## Updating Deposit Limits
+
+Only the protocol authority can update deposit limits.
+
+### Updating SOL Deposit Limit
+
+#### Function Signature
+
+```rust
+pub fn update_deposit_limit(
+    ctx: Context<UpdateDepositLimit>, 
+    new_limit: u64
+) -> Result<()>
+```
+
+#### Account Structure
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateDepositLimit<'info> {
+    #[account(
+        mut,
+        seeds = [b"merkle_tree"],
+        bump = tree_account.load()?.bump,
+        has_one = authority @ ErrorCode::Unauthorized
+    )]
+    pub tree_account: AccountLoader<'info, MerkleTreeAccount>,
+    
+    pub authority: Signer<'info>,
+}
+```
+
+#### Implementation
+
+```rust
+pub fn update_deposit_limit(ctx: Context<UpdateDepositLimit>, new_limit: u64) -> Result<()> {
+    let tree_account = &mut ctx.accounts.tree_account.load_mut()?;
+    
+    tree_account.max_deposit_amount = new_limit;
+    
+    msg!("Deposit limit updated to: {} lamports", new_limit);
+    Ok()
+}
+```
+
+**Code Reference**: `lib.rs:105-112`, `lib.rs:804-815`
+
+### Updating SPL Token Deposit Limit
+
+#### Function Signature
+
+```rust
+pub fn update_deposit_limit_for_spl_token(
+    ctx: Context<UpdateDepositLimitForSplToken>,
+    new_limit: u64
+) -> Result<()>
+```
+
+#### Account Structure
+
+```rust
+#[derive(Accounts)]
+pub struct UpdateDepositLimitForSplToken<'info> {
+    #[account(
+        mut,
+        seeds = [b"merkle_tree", mint.key().as_ref()],
+        bump = tree_account.load()?.bump,
+        has_one = authority @ ErrorCode::Unauthorized
+    )]
+    pub tree_account: AccountLoader<'info, MerkleTreeAccount>,
+    
+    pub mint: Account<'info, Mint>,
+    pub authority: Signer<'info>,
+}
+```
+
+#### Implementation
+
+```rust
+pub fn update_deposit_limit_for_spl_token(
+    ctx: Context<UpdateDepositLimitForSplToken>,
+    new_limit: u64
+) -> Result<()> {
+    let tree_account = &mut ctx.accounts.tree_account.load_mut()?;
+    
+    tree_account.max_deposit_amount = new_limit;
+    
+    msg!(
+        "Deposit limit updated to: {} for mint: {}",
+        new_limit,
+        ctx.accounts.mint.key()
+    );
+    
+    Ok()
+}
+```
+
+**Code Reference**: `lib.rs:191-206`, `lib.rs:858-872`
+
+## Withdrawal Limits
+
+Importantly, there are **no limits on withdrawals**. Users can withdraw any amount up to the available balance in the tree's token account:
+
+```rust
+else if ext_amount < 0 {
+    // No limit on withdrawals
+    let recipient_account_info = ctx.accounts.recipient.to_account_info();
+    // ... process withdrawal ...
+}
+```
+
+**Code Reference**: `lib.rs:285-316` (SOL), `lib.rs:453-476` (SPL)
+
+## Units and Decimals
+
+### SOL Deposits
+
+Limits are specified in **lamports**:
+- 1 SOL = 1,000,000,000 lamports
+- Default limit: 1,000,000,000,000 lamports = 1,000 SOL
+
+### SPL Token Deposits
+
+Limits are specified in the token's **smallest unit** based on its decimals:
+
+#### Examples
+
+**USDC (6 decimals)**:
+- 1 USDC = 1,000,000 units
+- Limit of 1,000,000 units = 1 USDC
+- Limit of 10,000,000,000 units = 10,000 USDC
+
+**ORE (variable decimals)**:
+- Check token metadata for decimal count
+- Adjust limits accordingly
+
+**General formula**:
+```
+token_amount = limit_value / (10 ^ decimals)
+```
+
+## Practical Examples
+
+### Example 1: Setting SOL Deposit Limit
+
+**Scenario**: Increase SOL deposit limit to 5,000 SOL
+
+```typescript
+const newLimit = 5000 * 1_000_000_000; // 5,000 SOL in lamports
+
+await program.methods
+  .updateDepositLimit(new anchor.BN(newLimit))
+  .accounts({
+    treeAccount: treeAccountPda,
+    authority: authorityKeypair.publicKey,
+  })
+  .signers([authorityKeypair])
+  .rpc();
+```
+
+### Example 2: Setting USDC Deposit Limit
+
+**Scenario**: Set USDC deposit limit to 100,000 USDC
+
+```typescript
+const usdcDecimals = 6;
+const newLimit = 100_000 * Math.pow(10, usdcDecimals); // 100,000 USDC
+
+await program.methods
+  .updateDepositLimitForSplToken(new anchor.BN(newLimit))
+  .accounts({
+    treeAccount: splTreeAccountPda,
+    mint: usdcMintAddress,
+    authority: authorityKeypair.publicKey,
+  })
+  .signers([authorityKeypair])
+  .rpc();
+```
+
+### Example 3: Initializing Token Tree with Custom Limit
+
+**Scenario**: Initialize USDT tree with 50,000 USDT limit
+
+```typescript
+const usdtDecimals = 6;
+const depositLimit = 50_000 * Math.pow(10, usdtDecimals); // 50,000 USDT
+
+await program.methods
+  .initializeTreeAccountForSplToken(new anchor.BN(depositLimit))
+  .accounts({
+    treeAccount: splTreeAccountPda,
+    mint: usdtMintAddress,
+    globalConfig: globalConfigPda,
+    authority: authorityKeypair.publicKey,
+    systemProgram: SystemProgram.programId,
+  })
+  .signers([authorityKeypair])
+  .rpc();
+```
+
+## Security Considerations
+
+### Authority Control
+
+Only the tree authority can update deposit limits:
+
+```rust
+#[account(
+    mut,
+    seeds = [b"merkle_tree"],
+    bump = tree_account.load()?.bump,
+    has_one = authority @ ErrorCode::Unauthorized
+)]
+pub tree_account: AccountLoader<'info, MerkleTreeAccount>,
+```
+
+Attempting to update limits without proper authority results in:
+> "Not authorized to perform this action"
+
+### Progressive Limits
+
+Consider implementing progressive limits:
+1. Start with conservative limits during launch
+2. Monitor usage patterns and liquidity
+3. Gradually increase limits as protocol matures
+4. Adjust based on market conditions
+
+### Per-Transaction vs Cumulative
+
+The current implementation enforces **per-transaction limits**:
+- Each individual deposit must be ≤ `max_deposit_amount`
+- No cumulative limit across multiple deposits
+- Users can make multiple deposits below the limit
+
+## Risk Management
+
+### Why Deposit Limits?
+
+1. **Liquidity Management**: Prevent excessive concentration
+2. **Circuit Breaker**: Limit potential exploit impact
+3. **Gradual Scaling**: Allow controlled growth
+4. **Market Risk**: Manage exposure during volatile periods
+
+### Recommended Limits by Asset Type
+
+#### Stablecoins (USDC, USDT)
+- **Conservative**: $10,000 - $50,000 per deposit
+- **Moderate**: $50,000 - $250,000 per deposit
+- **Aggressive**: $250,000+ per deposit
+
+#### Volatile Assets (ORE, ZEC)
+- **Conservative**: $1,000 - $5,000 per deposit
+- **Moderate**: $5,000 - $25,000 per deposit
+- **Aggressive**: $25,000+ per deposit
+
+#### Native SOL
+- **Conservative**: 100 - 500 SOL per deposit
+- **Moderate**: 500 - 2,500 SOL per deposit
+- **Aggressive**: 2,500+ SOL per deposit
+
+### Monitoring and Adjustment
+
+Regularly review and adjust limits based on:
+- Total Value Locked (TVL)
+- Transaction volume
+- Market volatility
+- Liquidity depth
+- Security incidents
+
+## Client-Side Implementation
+
+### Checking Deposit Limits
+
+Before submitting a deposit, check the current limit:
+
+```typescript
+const treeAccount = await program.account.merkleTreeAccount.fetch(treeAccountPda);
+const maxDeposit = treeAccount.maxDepositAmount;
+
+if (depositAmount > maxDeposit) {
+  throw new Error(`Deposit amount ${depositAmount} exceeds limit ${maxDeposit}`);
+}
+```
+
+### Handling Limit Exceeded Errors
+
+```typescript
+try {
+  await program.methods
+    .transact(proof, extDataMinified, encryptedOutput1, encryptedOutput2)
+    .accounts({...})
+    .rpc();
+} catch (error) {
+  if (error.message.includes('DepositLimitExceeded')) {
+    // Suggest splitting into multiple deposits
+    console.error('Deposit exceeds limit. Consider splitting into smaller amounts.');
+  }
+}
+```
+
+### Splitting Large Deposits
+
+For amounts exceeding the limit, split into multiple transactions:
+
+```typescript
+function splitDeposit(totalAmount: number, maxDeposit: number): number[] {
+  const deposits: number[] = [];
+  let remaining = totalAmount;
+  
+  while (remaining > 0) {
+    const amount = Math.min(remaining, maxDeposit);
+    deposits.push(amount);
+    remaining -= amount;
+  }
+  
+  return deposits;
+}
+
+// Usage
+const deposits = splitDeposit(5000, maxDeposit);
+for (const amount of deposits) {
+  await makeDeposit(amount);
+}
+```
+
+## Code References
+
+- MerkleTreeAccount structure: `lib.rs:896-910`
+- Default SOL limit: `lib.rs:78`
+- SOL deposit validation: `lib.rs:266-273`
+- SPL deposit validation: `lib.rs:434-441`
+- Update SOL limit function: `lib.rs:105-112`
+- Update SPL limit function: `lib.rs:191-206`
+- Update limit accounts (SOL): `lib.rs:804-815`
+- Update limit accounts (SPL): `lib.rs:858-872`
+- No withdrawal limits: `lib.rs:285-316` (SOL), `lib.rs:453-476` (SPL)
